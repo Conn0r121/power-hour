@@ -89,6 +89,10 @@ img { max-width: 100%; }
 .brand span { color: var(--accent-text); }
 .error { color: var(--bad) !important; font-weight: 600; }
 code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; font-size: .9em; }
+.panel a { color: var(--accent-text); }
+.steps { margin: 0; padding-left: 1.2rem; color: var(--muted); display: grid; gap: .5rem; font-size: .95rem; }
+#setup-redirect { word-break: break-all; }
+.fine { font-size: .85rem; }
 
 /* Main */
 .top {
@@ -231,10 +235,20 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
 </section>
 
 <section data-view="setup" class="center" hidden>
-  <div class="panel">
+  <form id="setup-form" class="panel" novalidate>
     <h1 class="brand">Power Hour</h1>
-    <p>This copy isn’t set up yet. Add your Spotify Client ID to <code>CONFIG</code> near the bottom of <code>index.html</code>, then reload. The README walks through it.</p>
-  </div>
+    <p>Connect your own Spotify app. Your Client ID is saved only in this browser and is only ever sent to Spotify.</p>
+    <ol class="steps">
+      <li>Open <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">developer.spotify.com/dashboard</a> and choose <b>Create app</b>.</li>
+      <li>Add this Redirect URI exactly: <code id="setup-redirect"></code> <button class="linkish" type="button" id="copy-redirect">Copy</button></li>
+      <li>Check <b>Web API</b> and <b>Web Playback SDK</b>, save, then copy the <b>Client ID</b> from the app’s Settings.</li>
+    </ol>
+    <label for="setup-id">Spotify Client ID</label>
+    <input id="setup-id" autocomplete="off" spellcheck="false" autocapitalize="off" required>
+    <p id="setup-error" class="error" hidden>That doesn’t look like a Client ID. It’s 32 letters and numbers.</p>
+    <button class="btn primary" type="submit">Save and continue</button>
+    <p class="fine">You don’t need the Client Secret. Don’t paste it here.</p>
+  </form>
 </section>
 
 <section data-view="connect" class="center" hidden>
@@ -250,7 +264,7 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
   <header class="top">
     <h1 class="brand">Power Hour</h1>
     <span class="status" id="status" data-s="connecting"><span class="dot"></span><span id="status-text">Connecting to Spotify…</span></span>
-    <div class="tools"><span id="who" class="status"></span><button class="linkish" id="signout" type="button">Sign out</button></div>
+    <div class="tools"><span id="who" class="status"></span><button class="linkish" id="change-app" type="button">Change Spotify app</button><button class="linkish" id="signout" type="button">Sign out</button></div>
   </header>
 
   <main class="wrap">
@@ -326,9 +340,9 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
 
 <script>
 /* ======================== CONFIG ======================== */
+// Each person enters their own Spotify Client ID on the setup screen;
+// it's kept in their browser's localStorage, not in this file.
 const CONFIG = {
-  // From developer.spotify.com/dashboard → your app → Settings
-  clientId: "PASTE_YOUR_SPOTIFY_CLIENT_ID_HERE",
   // SHA-256 of the shared password. Default password is "powerhour".
   // Make a new one: echo -n "yourpassword" | shasum -a 256
   passwordHash: "2099314b9070ee479f2919c430458a0f78f467b808dbe9dfac84b34d370fec1e",
@@ -401,6 +415,33 @@ function init() {
   };
 }
 
+/* ---------- Spotify app (per browser) ---------- */
+const getClientId = () => store.get("clientId", "");
+function showSetup() {
+  showView("setup");
+  $("#setup-redirect").textContent = REDIRECT_URI;
+  $("#setup-id").value = getClientId();
+  $("#setup-error").hidden = true;
+  $("#copy-redirect").onclick = () => {
+    navigator.clipboard?.writeText(REDIRECT_URI)
+      .then(() => toast("Redirect URI copied."), () => toast("Couldn’t copy. Select it and copy by hand."));
+  };
+  $("#setup-form").onsubmit = (e) => {
+    e.preventDefault();
+    const id = $("#setup-id").value.trim();
+    if (!/^[0-9a-f]{32}$/i.test(id)) { $("#setup-error").hidden = false; $("#setup-id").select(); return; }
+    if (id !== getClientId()) store.del("auth");
+    store.set("clientId", id);
+    boot();
+  };
+  $("#setup-id").focus();
+}
+function changeApp() {
+  store.del("auth");
+  try { player?.disconnect(); } catch {}
+  showSetup();
+}
+
 /* ---------- Spotify auth (PKCE, no server) ---------- */
 function randomString(n) {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -415,7 +456,7 @@ async function login() {
   const state = randomString(16);
   store.set("pkce", { verifier, state });
   location.href = "https://accounts.spotify.com/authorize?" + new URLSearchParams({
-    response_type: "code", client_id: CONFIG.clientId, scope: SCOPES,
+    response_type: "code", client_id: getClientId(), scope: SCOPES,
     code_challenge_method: "S256", code_challenge: challenge, redirect_uri: REDIRECT_URI, state,
   });
 }
@@ -423,7 +464,7 @@ async function tokenRequest(body) {
   const r = await fetch("https://accounts.spotify.com/api/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ client_id: CONFIG.clientId, ...body }),
+    body: new URLSearchParams({ client_id: getClientId(), ...body }),
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error_description || j.error || "Spotify sign-in failed (" + r.status + ")");
@@ -515,7 +556,7 @@ async function connectPlayer() {
     $("#who").textContent = me.display_name || me.id || "";
     if (me.product && me.product !== "premium") return setStatus("error", "Spotify Premium is required to play music here.");
   } catch (e) {
-    if (e.status === 403) return setStatus("error", "This Spotify account isn’t on the app’s user list. Ask whoever set this up to add your Spotify email.");
+    if (e.status === 403) return setStatus("error", "This Spotify account isn’t on your Spotify app’s user list. Add its email under User Management in the Spotify dashboard.");
     return setStatus("error", e.message);
   }
   try { await loadSdk(); } catch (e) { return setStatus("error", e.message); }
@@ -1028,10 +1069,11 @@ function bindMain() {
     stopAll(); list = []; saveList(); renderList();
   };
   $("#signout").onclick = () => signOut();
+  $("#change-app").onclick = changeApp;
 }
 
 async function boot() {
-  if (!CONFIG.clientId || CONFIG.clientId.startsWith("PASTE")) return showView("setup");
+  if (!getClientId()) return showSetup();
   const params = new URLSearchParams(location.search);
   if (params.has("code") || params.has("error")) {
     try { await handleCallback(params); }
