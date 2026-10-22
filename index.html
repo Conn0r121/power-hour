@@ -294,6 +294,7 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
       </div>
       <div class="row-tools">
         <button class="linkish" type="button" id="export-btn">Export list</button>
+        <button class="linkish" type="button" id="export-full-btn">Export with audio files</button>
         <button class="linkish" type="button" id="import-btn">Import list</button>
         <button class="linkish" type="button" id="clear-btn">Clear list</button>
       </div>
@@ -402,8 +403,35 @@ function showView(name) {
 }
 
 /* ---------- State ---------- */
-let list = store.get("list", []);
-let settings = Object.assign({ segSec: 60, fadeSec: 2, volume: 0.8, drinkCue: true, overlap: true }, store.get("settings", {}));
+// Upgrades a saved or imported row from any older format; drops anything unusable.
+function normalizeRow(r) {
+  if (!r || typeof r !== "object") return null;
+  const row = { ...r, key: uid() };
+  row.src ||= row.playUri ? "spotify" : row.url ? "url" : row.fileId ? "file" : null;
+  if (row.src === "spotify" && !row.playUri) return null;
+  if (row.src === "url" && !row.url) return null;
+  if (row.src === "file" && !row.fileId) return null;
+  if (!["spotify", "url", "file"].includes(row.src)) return null;
+  for (const k of ["name", "artists", "album", "art"]) row[k] = String(row[k] ?? "");
+  row.name ||= "Untitled";
+  row.durationMs = Math.max(0, +row.durationMs || 0);
+  row.startMs = Math.max(0, +row.startMs || 0);
+  const n = Math.round(+row.lenSec);
+  if (n >= 5 && n <= 600) row.lenSec = n; else delete row.lenSec;
+  return row;
+}
+function cleanSettings(s) {
+  const out = {};
+  if (!s || typeof s !== "object") return out;
+  if (+s.segSec >= 10 && +s.segSec <= 300) out.segSec = Math.round(+s.segSec);
+  if (+s.fadeSec >= 0 && +s.fadeSec <= 5) out.fadeSec = +s.fadeSec;
+  if (+s.volume >= 0 && +s.volume <= 1) out.volume = +s.volume;
+  if (typeof s.drinkCue === "boolean") out.drinkCue = s.drinkCue;
+  if (typeof s.overlap === "boolean") out.overlap = s.overlap;
+  return out;
+}
+let list = (store.get("list", []) || []).map(normalizeRow).filter(Boolean);
+let settings = Object.assign({ segSec: 60, fadeSec: 2, volume: 0.8, drinkCue: true, overlap: true }, cleanSettings(store.get("settings", {})));
 const saveList = () => store.set("list", list);
 const saveSettings = () => store.set("settings", settings);
 // Per-song length (row.lenSec) overrides the default from Settings.
@@ -1211,33 +1239,88 @@ async function endRun() {
   renderList();
 }
 
-/* ---------- Import / export ---------- */
-function exportList() {
-  const data = { app: "power-hour", version: 1, settings, songs: list.map(({ key, ...r }) => r) };
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+/* ---------- Import / export ----------
+   Exports use the same row format as the saved list. To keep every older export
+   importable: only ADD fields in future versions (never rename or remove one),
+   bump EXPORT_VERSION, and teach normalizeRow()/cleanSettings() to upgrade old data. */
+const EXPORT_VERSION = 2; // 1: Spotify songs only. 2: adds audio links/files, lenSec, embedded files.
+function blobToDataUrl(blob) {
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result);
+    fr.onerror = () => rej(fr.error);
+    fr.readAsDataURL(blob);
+  });
+}
+function download(name, blob) {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = "power-hour-list.json";
+  a.download = name;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+async function exportList(withFiles) {
+  const data = {
+    app: "power-hour", version: EXPORT_VERSION, exportedAt: new Date().toISOString(),
+    settings, songs: list.map(({ key, ...r }) => r),
+  };
+  let skipped = 0;
+  if (withFiles) {
+    toast("Packing audio files…");
+    data.files = {};
+    for (const r of list) {
+      if (r.src !== "file" || data.files[r.fileId]) continue;
+      const blob = await fileDb.get(r.fileId).catch(() => null);
+      if (!blob) { skipped++; continue; }
+      data.files[r.fileId] = { name: blob.name || r.name, type: blob.type || "audio/mpeg", data: await blobToDataUrl(blob) };
+    }
+  }
+  const day = new Date().toISOString().slice(0, 10);
+  download(`power-hour-${withFiles ? "backup" : "list"}-${day}.json`, new Blob([JSON.stringify(data, null, withFiles ? 0 : 2)], { type: "application/json" }));
+  const fileRows = list.filter((r) => r.src === "file").length;
+  if (withFiles) toast(`Exported ${list.length} songs with ${Object.keys(data.files).length} audio files.${skipped ? ` ${skipped} weren’t in this browser.` : ""}`);
+  else if (fileRows) toast(`Exported ${list.length} songs. Audio files aren’t included; use “Export with audio files” for a full backup.`);
+}
+// Accepts any export version, or a bare array of songs. Returns null if it isn't one.
+function parseExport(data) {
+  const songs = Array.isArray(data) ? data : Array.isArray(data?.songs) ? data.songs : null;
+  if (!songs) return null;
+  return {
+    songs: songs.map(normalizeRow).filter(Boolean),
+    settings: Array.isArray(data) ? {} : cleanSettings(data.settings),
+    files: !Array.isArray(data) && data.files && typeof data.files === "object" ? data.files : {},
+  };
 }
 async function importFile(file) {
   const text = await file.text();
   let data = null;
   try { data = JSON.parse(text); } catch {}
-  if (data && Array.isArray(data.songs)) {
-    if (list.length && !confirm(`Replace your current list with ${data.songs.length} songs from this file?`)) return;
-    list = data.songs.map((r) => ({ ...r, key: uid() }));
-    saveList(); renderList();
-    await checkFiles(); pruneFiles();
-    toast(`Imported ${list.length} songs.`);
-  } else {
-    await addFromText(text);
+  const parsed = data && parseExport(data);
+  if (!parsed) return addFromText(text);
+  if (list.length && !confirm(`Replace your current list (${list.length} songs) with the ${parsed.songs.length} songs in this file?\n\nTo keep your current list, cancel and export it first.`)) return;
+  let restored = 0;
+  for (const [id, f] of Object.entries(parsed.files)) {
+    if (typeof f?.data !== "string" || !parsed.songs.some((r) => r.fileId === id)) continue;
+    try {
+      const blob = await (await fetch(f.data)).blob();
+      await fileDb.put(id, new File([blob], f.name || "audio", { type: f.type || blob.type }));
+      if (objectUrls.has(id)) { URL.revokeObjectURL(objectUrls.get(id)); objectUrls.delete(id); }
+      restored++;
+    } catch {}
   }
+  await stopAll();
+  list = parsed.songs;
+  Object.assign(settings, parsed.settings); saveSettings(); syncSettingsUI();
+  saveList(); renderList();
+  await checkFiles(); pruneFiles();
+  const missing = list.filter((r) => r.src === "file" && r.unavailable).length;
+  toast(`Imported ${list.length} songs${restored ? ` and ${restored} audio file${restored === 1 ? "" : "s"}` : ""}.` +
+    (missing ? ` ${missing} audio file${missing === 1 ? " isn’t" : "s aren’t"} in this browser; add ${missing === 1 ? "it" : "them"} again.` : ""));
 }
 
 /* ---------- Wiring ---------- */
 let mainBound = false;
+let syncSettingsUI = () => {};
 function bindMain() {
   if (mainBound) return;
   mainBound = true;
@@ -1339,19 +1422,24 @@ function bindMain() {
     $("#fade-val").textContent = settings.fadeSec ? settings.fadeSec + "s" : "off";
     $("#vol-val").textContent = Math.round(settings.volume * 100) + "%";
   };
-  seg.value = settings.segSec; fadeIn.value = settings.fadeSec; vol.value = Math.round(settings.volume * 100); drink.checked = settings.drinkCue; overlap.checked = settings.overlap;
-  showVals();
+  syncSettingsUI = () => {
+    seg.value = settings.segSec; fadeIn.value = settings.fadeSec; vol.value = Math.round(settings.volume * 100);
+    drink.checked = settings.drinkCue; overlap.checked = settings.overlap;
+    showVals(); applyVolume();
+  };
+  syncSettingsUI();
   seg.onchange = () => { settings.segSec = Math.max(10, Math.min(300, Math.round(+seg.value) || 60)); seg.value = settings.segSec; saveSettings(); renderList(); };
   fadeIn.oninput = () => { settings.fadeSec = +fadeIn.value; saveSettings(); showVals(); };
   vol.oninput = () => { settings.volume = +vol.value / 100; saveSettings(); showVals(); applyVolume(); };
   drink.onchange = () => { settings.drinkCue = drink.checked; saveSettings(); };
   overlap.onchange = () => { settings.overlap = overlap.checked; saveSettings(); };
 
-  $("#export-btn").onclick = exportList;
+  $("#export-btn").onclick = () => exportList(false);
+  $("#export-full-btn").onclick = () => exportList(true);
   $("#import-btn").onclick = () => $("#import-file").click();
   $("#import-file").onchange = (e) => { const f = e.target.files[0]; if (f) importFile(f); e.target.value = ""; };
   $("#clear-btn").onclick = () => {
-    if (!list.length || !confirm("Remove every song from the list?")) return;
+    if (!list.length || !confirm("Remove every song from the list? Uploaded audio files are deleted from this browser too.\n\nTo keep a copy, cancel and use “Export with audio files” first.")) return;
     stopAll(); list = []; saveList(); renderList(); pruneFiles();
   };
   $("#signout").onclick = () => signOut();

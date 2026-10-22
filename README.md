@@ -89,7 +89,9 @@ Open `http://127.0.0.1:8000/` (not `localhost`).
 - **Overlap** (Settings, on by default): when an audio file is on either side of a change, the next track starts during the fade so the two crossfade. Spotify → Spotify can't overlap (Spotify plays one stream at a time), so those fade out, then in.
 - **Test fade** plays the end of a song fading (or overlapping) into the next.
 - Rows warn if a song is unavailable in your region, if Spotify substituted a different version, or if the start is too late for a full minute.
-- The list saves in the browser automatically. **Export** / **Import** in Settings moves it between computers.
+- The list saves in the browser automatically, and survives site updates.
+- **Backups** (Settings): **Export list** saves songs and settings; **Export with audio files** also embeds your uploaded files, so it's a full backup you can restore on any computer. **Import list** restores either kind, replacing the current list (it asks first).
+- Any export from any version of this app keeps importing in later versions. Rule for changing the format: only add fields, never rename or remove them; bump `EXPORT_VERSION` in `index.html` and upgrade old rows in `normalizeRow()`.
 - During the hour: Space pauses, arrow keys skip. Keep the tab open; the screen is kept awake where the browser allows it.
 
 ## Known limits
