@@ -87,7 +87,7 @@ Open `http://127.0.0.1:8000/` (not `localhost`).
 - **Hide what's next** (Settings, or the **Hide next** button during the hour) removes the "Next up" line.
 - **Sound bite** (checkbox per row): for intros, airhorns and clips between songs. Sound bites play to their end unless you set **Plays**, don't get a song number, show no countdown or progress bar, never trigger the "Drink" flash, and "Next up" skips past them to the next real song.
 - During the hour: "3 of 60" counts real songs, the time under it is what's left of the whole hour, and the progress bar fills once per song. "Drink" flashes when a real song ends.
-- Drag the handle to reorder (or focus it and use Alt + arrow keys).
+- Drag the handle to reorder (or focus it and use Alt + arrow keys). While dragging, move toward the top or bottom edge to scroll; the closer to the edge, the faster. The mouse wheel also scrolls mid-drag.
 - **Play** previews from the start time. While it plays, **Pause** / **Resume**, **Mark start here** sets the start to the current spot, and −5s / −1s / +1s / +5s scrub.
 - **Overlap** (Settings, on by default): when an audio file is on either side of a change, the next track starts as the current one begins its fade-out, and fades in over its own fade-in. A fade-out of 0 means a hard cut with no overlap. Spotify → Spotify can't overlap (Spotify plays one stream at a time), so those fade out, then in.
 - **Test fade** plays the end of a song fading (or overlapping) into the next, on the same timeline as the real run: short songs play from their start, and if the next one ends within the test it ends with its own fade-out.

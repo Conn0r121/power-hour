@@ -1505,8 +1505,23 @@ function bindMain() {
     }
   });
   if (window.Sortable) {
+    // Auto-scroll while dragging: a tall zone at each edge (the bottom one starts above the
+    // fixed dock), scrolling faster the closer you get. Fallback mode also lets the wheel scroll.
+    const EDGE = 150;
     Sortable.create(L, {
       handle: ".grip", animation: 150,
+      forceFallback: true, fallbackTolerance: 3,
+      scroll: true, bubbleScroll: false,
+      scrollSensitivity: EDGE + 160, // must cover the dock too, or scrollFn isn't called there
+      scrollFn(offX, offY, evt) {
+        const y = evt?.touches?.[0]?.clientY ?? evt?.clientY;
+        if (y == null) return "continue";
+        const fromTop = y, fromBottom = $(".bottom").getBoundingClientRect().top - y;
+        const near = Math.min(fromTop, fromBottom);
+        if (near > EDGE) return;
+        const t = Math.min(1, (EDGE - near) / EDGE); // 0 at zone edge → 1 at (or past) the edge
+        window.scrollBy(0, (fromTop < fromBottom ? -1 : 1) * (4 + t * t * 56));
+      },
       onEnd(e) {
         if (e.oldIndex === e.newIndex) return;
         const [m] = list.splice(e.oldIndex, 1);
