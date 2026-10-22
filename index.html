@@ -55,6 +55,7 @@ body {
 button, input, textarea, select { font: inherit; color: inherit; }
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 img { max-width: 100%; }
+img[src=""], img:not([src]) { visibility: hidden; }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: .4em;
@@ -115,6 +116,8 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
   border: 1.5px solid var(--line); background: var(--surface);
 }
 .add .hint { grid-column: 1 / -1; margin: 0; font-size: .85rem; color: var(--muted); }
+.add .hint .linkish { color: var(--accent-text); font-weight: 600; }
+.add.drag textarea { border-color: var(--accent); border-style: dashed; }
 
 .settings { margin: 1.25rem 0 0; border-top: 1.5px solid var(--line); border-bottom: 1.5px solid var(--line); }
 .settings summary { cursor: pointer; padding: .8rem 0; font-weight: 600; }
@@ -140,6 +143,7 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
 .grip svg { width: 14px; height: 22px; fill: currentColor; }
 .num { grid-area: num; font: 800 1.5rem/1 var(--display); color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
 .art { grid-area: art; width: 3.2rem; height: 3.2rem; border-radius: .5rem; object-fit: cover; background: var(--surface-2); }
+.noart { display: grid; place-items: center; color: var(--muted); font-size: 1.4rem; }
 .meta { grid-area: meta; min-width: 0; }
 .title { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sub { color: var(--muted); font-size: .9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -153,6 +157,9 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
 }
 .ts[aria-invalid=true] { border-color: var(--bad); }
 .len { color: var(--muted); font-size: .85rem; white-space: nowrap; margin-left: .2rem; font-variant-numeric: tabular-nums; }
+.seglen { display: inline-flex; align-items: center; gap: .3rem; color: var(--muted); font-size: .85rem; white-space: nowrap; margin-left: .4rem; }
+.ts.segin { width: 3.2rem; }
+.ts.segin::placeholder { color: var(--muted); font-weight: 400; }
 .acts { grid-area: acts; display: flex; align-items: center; gap: .35rem; justify-content: flex-end; }
 
 .empty { padding: 3rem 1rem; text-align: center; color: var(--muted); }
@@ -270,18 +277,20 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
   <main class="wrap">
     <form id="add-form" class="add">
       <label for="add-input">Add songs</label>
-      <textarea id="add-input" rows="2" placeholder="Paste Spotify song or playlist links"></textarea>
+      <textarea id="add-input" rows="2" placeholder="Paste Spotify song or playlist links, or links to MP3s"></textarea>
       <button class="btn primary" type="submit" id="add-btn">Add</button>
-      <p class="hint">One link per line. Put a time after a link to set where it starts, like <code>open.spotify.com/track/… 1:23</code>. In Spotify: right-click a song, then Share, then Copy Song Link.</p>
+      <p class="hint">One link per line. Put a time after a link to set where it starts, like <code>open.spotify.com/track/… 1:23</code>. In Spotify: right-click a song, then Share, then Copy Song Link. Audio links must go straight to the file (Dropbox share links work).</p>
+      <p class="hint">Or <button class="linkish" type="button" id="file-btn">add MP3s from this computer</button>, or drop them here. They’re saved in this browser only.</p>
     </form>
 
     <details class="settings">
       <summary>Settings and list tools</summary>
       <div class="grid">
-        <label class="field"><span>Seconds per song</span><input type="number" id="set-seg" min="10" max="300" step="1"></label>
+        <label class="field"><span>Default seconds per song</span><input type="number" id="set-seg" min="10" max="300" step="1"></label>
         <label class="field"><span>Fade between songs: <b id="fade-val"></b></span><input type="range" id="set-fade" min="0" max="5" step="0.5"></label>
         <label class="field"><span>Volume: <b id="vol-val"></b></span><input type="range" id="set-vol" min="0" max="100" step="1"></label>
         <label class="check"><input type="checkbox" id="set-drink"> Flash “Drink” at each change</label>
+        <label class="check" title="Two Spotify songs can’t overlap (Spotify plays one at a time), so they fade out, then in."><input type="checkbox" id="set-overlap"> Overlap songs during the fade when an audio file is involved</label>
       </div>
       <div class="row-tools">
         <button class="linkish" type="button" id="export-btn">Export list</button>
@@ -300,8 +309,10 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
       <div class="info"><div class="title" id="nb-title"></div><div class="sub" id="nb-sub"></div></div>
       <div class="pos" id="nb-pos">0:00</div>
       <div class="controls">
-        <button class="btn small" type="button" id="nb-back" data-preview-only>−5s</button>
-        <button class="btn small" type="button" id="nb-fwd" data-preview-only>+5s</button>
+        <button class="btn small" type="button" data-seek="-5000" data-preview-only>−5s</button>
+        <button class="btn small" type="button" data-seek="-1000" data-preview-only>−1s</button>
+        <button class="btn small" type="button" data-seek="1000" data-preview-only>+1s</button>
+        <button class="btn small" type="button" data-seek="5000" data-preview-only>+5s</button>
         <button class="btn small primary" type="button" id="nb-mark" data-preview-only>Mark start here</button>
         <button class="btn small" type="button" id="nb-stop">Stop</button>
       </div>
@@ -337,6 +348,7 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
 
 <div id="toast" role="status" aria-live="polite"></div>
 <input type="file" id="import-file" accept=".json,.txt,application/json,text/plain" hidden>
+<input type="file" id="audio-file" accept="audio/*,.mp3,.m4a,.aac,.wav,.ogg,.oga,.opus,.flac" multiple hidden>
 
 <script>
 /* ======================== CONFIG ======================== */
@@ -391,10 +403,11 @@ function showView(name) {
 
 /* ---------- State ---------- */
 let list = store.get("list", []);
-let settings = Object.assign({ segSec: 60, fadeSec: 2, volume: 0.8, drinkCue: true }, store.get("settings", {}));
+let settings = Object.assign({ segSec: 60, fadeSec: 2, volume: 0.8, drinkCue: true, overlap: true }, store.get("settings", {}));
 const saveList = () => store.set("list", list);
 const saveSettings = () => store.set("settings", settings);
-const segMs = () => settings.segSec * 1000;
+// Per-song length (row.lenSec) overrides the default from Settings.
+const lenMs = (r) => (r.lenSec || settings.segSec) * 1000;
 const fadeOutMs = () => settings.fadeSec * 1000;
 const fadeInMs = () => Math.min(1200, settings.fadeSec * 600);
 
@@ -532,7 +545,7 @@ async function api(path, { method = "GET", body, retry = true } = {}) {
 }
 
 /* ---------- Player (Web Playback SDK) ---------- */
-let player = null, deviceId = null, lastState = null, lastStateAt = 0, curVol = settings.volume;
+let player = null, deviceId = null, lastState = null, lastStateAt = 0;
 
 function setStatus(s, text) {
   $("#status").dataset.s = s;
@@ -563,7 +576,7 @@ async function connectPlayer() {
   player = new Spotify.Player({
     name: "Power Hour",
     getOAuthToken: (cb) => getToken().then(cb).catch(() => {}),
-    volume: curVol,
+    volume: clamp01(spotifyCh.level * settings.volume),
   });
   player.addListener("ready", ({ device_id }) => { deviceId = device_id; setStatus("ok", "Ready"); });
   player.addListener("not_ready", () => { deviceId = null; setStatus("error", "The player went offline. Reload the page."); });
@@ -575,34 +588,175 @@ async function connectPlayer() {
   player.connect();
 }
 function unlockAudio() { try { player?.activateElement?.(); } catch {} }
-function setVolumeNow(v) {
-  curVol = Math.max(0, Math.min(1, v));
-  player?.setVolume(curVol).catch(() => {});
+async function playAt(uri, ms) {
+  if (!deviceId) throw new Error("The Spotify player isn’t ready yet.");
+  await api("/me/player/play?device_id=" + deviceId, { method: "PUT", body: { uris: [uri], position_ms: Math.max(0, Math.round(ms)) } });
 }
-let fadeId = 0;
-function cancelFade() { fadeId++; }
-function fadeTo(target, ms) {
-  const id = ++fadeId, from = curVol, t0 = performance.now();
-  if (ms <= 0) { setVolumeNow(target); return Promise.resolve(); }
+/* ---------- Audio files and links ---------- */
+const isAudio = (r) => r.src === "file" || r.src === "url";
+
+const fileDb = (() => {
+  let dbp;
+  const open = () => dbp ||= new Promise((res, rej) => {
+    const q = indexedDB.open("power-hour", 1);
+    q.onupgradeneeded = () => q.result.createObjectStore("files");
+    q.onsuccess = () => res(q.result);
+    q.onerror = () => rej(q.error);
+  });
+  const tx = async (mode, fn) => {
+    const db = await open();
+    return new Promise((res, rej) => {
+      const t = db.transaction("files", mode);
+      const q = fn(t.objectStore("files"));
+      t.oncomplete = () => res(q.result);
+      t.onerror = () => rej(t.error);
+    });
+  };
+  return {
+    put: (k, v) => tx("readwrite", (s) => s.put(v, k)),
+    get: (k) => tx("readonly", (s) => s.get(k)),
+    del: (k) => tx("readwrite", (s) => s.delete(k)),
+    keys: () => tx("readonly", (s) => s.getAllKeys()),
+  };
+})();
+const objectUrls = new Map();
+async function mediaUrl(r) {
+  if (r.src === "url") return r.url;
+  if (objectUrls.has(r.fileId)) return objectUrls.get(r.fileId);
+  const blob = await fileDb.get(r.fileId).catch(() => null);
+  if (!blob) throw new Error("That file isn’t saved in this browser. Add it again.");
+  const u = URL.createObjectURL(blob);
+  objectUrls.set(r.fileId, u);
+  return u;
+}
+async function pruneFiles() {
+  const used = new Set(list.filter((r) => r.src === "file").map((r) => r.fileId));
+  for (const k of await fileDb.keys().catch(() => [])) {
+    if (used.has(k)) continue;
+    await fileDb.del(k).catch(() => {});
+    if (objectUrls.has(k)) { URL.revokeObjectURL(objectUrls.get(k)); objectUrls.delete(k); }
+  }
+}
+async function checkFiles() {
+  let changed = false;
+  for (const r of list) {
+    if (r.src !== "file") continue;
+    const missing = !(await fileDb.get(r.fileId).catch(() => null));
+    if (!!r.unavailable !== missing) { r.unavailable = missing; changed = true; }
+  }
+  if (changed) { saveList(); renderList(); }
+}
+function probeDuration(url) {
+  return new Promise((res, rej) => {
+    const a = new Audio();
+    const timer = setTimeout(() => fail("it took too long to load"), 15000);
+    const fail = (why) => { clearTimeout(timer); a.removeAttribute("src"); rej(new Error(why)); };
+    a.preload = "metadata";
+    a.onloadedmetadata = () => {
+      clearTimeout(timer);
+      isFinite(a.duration) && a.duration > 0 ? res(Math.round(a.duration * 1000)) : fail("couldn’t read its length");
+    };
+    a.onerror = () => fail("it isn’t an audio file this browser can play");
+    a.src = url;
+  });
+}
+/* ---------- Output channels ----------
+   One Spotify channel plus two <audio> channels. Each has its own level (0–1),
+   scaled by the master volume, so an audio file can overlap a Spotify song or
+   another audio file. Two Spotify songs can't overlap: Spotify plays one stream. */
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+function loadInto(ch, url, ms) {
+  const el = ch.el;
+  return new Promise((res, rej) => {
+    const seek = () => { try { el.currentTime = ms / 1000; } catch {} };
+    if (ch.url === url && el.readyState >= 1) { seek(); return res(); }
+    const done = () => { off(); seek(); res(); };
+    const fail = () => { off(); ch.url = ""; rej(new Error("Couldn’t load that audio.")); };
+    const off = () => { el.removeEventListener("loadedmetadata", done); el.removeEventListener("error", fail); };
+    el.addEventListener("loadedmetadata", done);
+    el.addEventListener("error", fail);
+    ch.url = url;
+    el.src = url;
+    el.load();
+  });
+}
+function makeAudioChannel() {
+  const el = new Audio();
+  el.preload = "auto";
+  return {
+    el, url: "", level: 1, fadeId: 0, key: null,
+    apply() { el.volume = clamp01(this.level * settings.volume); },
+    async play(r, ms) {
+      this.key = r.key;
+      await loadInto(this, await mediaUrl(r), ms);
+      this.apply();
+      await el.play();
+    },
+    pause() { el.pause(); },
+    resume() { el.play().catch(() => {}); },
+    seek(ms) { try { el.currentTime = Math.max(0, ms) / 1000; } catch {} },
+    pos() { return el.currentTime * 1000; },
+    stop() { el.pause(); this.key = null; },
+  };
+}
+const spotifyCh = {
+  level: 1, fadeId: 0, key: null,
+  apply() { player?.setVolume(clamp01(this.level * settings.volume)).catch(() => {}); },
+  async play(r, ms) { this.key = r.key; this.apply(); await playAt(r.playUri, ms); },
+  pause() { player?.pause().catch(() => {}); },
+  resume() { player?.resume().catch(() => {}); },
+  seek(ms) { player?.seek(Math.max(0, ms)).catch(() => {}); },
+  pos() {
+    if (!lastState) return 0;
+    return lastState.position + (lastState.paused ? 0 : performance.now() - lastStateAt);
+  },
+  stop() { if (this.key) { this.key = null; this.pause(); } },
+};
+const audioChs = [makeAudioChannel(), makeAudioChannel()];
+const channels = [spotifyCh, ...audioChs];
+let activeCh = null; // the channel the now-playing bar follows
+
+function setLevel(ch, v) { ch.fadeId++; ch.level = clamp01(v); ch.apply(); }
+function fade(ch, to, ms) {
+  const id = ++ch.fadeId, from = ch.level, t0 = performance.now();
+  if (ms <= 0) { ch.level = clamp01(to); ch.apply(); return Promise.resolve(); }
   return new Promise((res) => {
     const step = () => {
-      if (id !== fadeId) return res();
+      if (id !== ch.fadeId) return res();
       const p = Math.min(1, (performance.now() - t0) / ms);
-      setVolumeNow(from + (target - from) * p);
+      ch.level = clamp01(from + (to - from) * p);
+      ch.apply();
       if (p < 1) setTimeout(step, 50); else res();
     };
     step();
   });
 }
-async function playAt(uri, ms) {
-  if (!deviceId) throw new Error("The Spotify player isn’t ready yet.");
-  await api("/me/player/play?device_id=" + deviceId, { method: "PUT", body: { uris: [uri], position_ms: Math.max(0, Math.round(ms)) } });
+function cancelFades() { for (const c of channels) c.fadeId++; }
+function applyVolume() { for (const c of channels) c.apply(); }
+function stopChannels() { cancelFades(); for (const c of channels) c.stop(); activeCh = null; }
+function channelFor(r, avoid) {
+  if (!isAudio(r)) return spotifyCh;
+  const free = audioChs.filter((c) => c !== avoid);
+  return free.find((c) => c.key === r.key) || free.find((c) => !c.key) || free[0];
 }
-function livePos() {
-  if (!lastState) return 0;
-  return lastState.position + (lastState.paused ? 0 : performance.now() - lastStateAt);
+// Start r on its channel at `level`, stopping every other channel except `keep`.
+// activeCh is set before the first await, so callers can read it synchronously.
+async function startOn(r, ms, { keep = null, level = 1 } = {}) {
+  const ch = channelFor(r, keep);
+  for (const c of channels) if (c !== ch && c !== keep) c.stop();
+  setLevel(ch, level);
+  activeCh = ch;
+  await ch.play(r, ms);
+  return ch;
 }
+// play() rejects with AbortError when we pause or switch before it starts; that isn’t an error.
+const interrupted = (e) => e?.name === "AbortError";
+const canOverlap = (a, b) => settings.overlap && settings.fadeSec > 0 && (isAudio(a) || isAudio(b));
+
+const livePos = () => (activeCh ? activeCh.pos() : 0);
 function isOnRow(r) {
+  if (!activeCh || activeCh.key !== r.key) return false;
+  if (isAudio(r)) return true;
   const t = lastState?.track_window?.current_track;
   if (!t) return false;
   return t.uri === r.playUri || t.id === r.id || t.linked_from?.id === r.id;
@@ -630,13 +784,61 @@ function rowFromTrack(t, requestedId, startMs = 0) {
   };
 }
 function parseLinks(text) {
-  const re = /(track|playlist)[\/:]([A-Za-z0-9]{22})/g;
+  // Spotify links/URIs first; any other http(s) link is treated as an audio file.
+  const re = /https?:\/\/open\.spotify\.com\/(?:[\w-]+\/)*?(track|playlist)\/([A-Za-z0-9]{22})\S*|(track|playlist)[\/:]([A-Za-z0-9]{22})|(https?:\/\/\S+)/g;
   const matches = [...text.matchAll(re)];
   return matches.map((m, i) => {
     const after = text.slice(m.index + m[0].length, matches[i + 1]?.index ?? text.length);
     const tm = after.match(/(?:^|\s|,)(\d{1,2}:[0-5]\d)(?!\d)/);
-    return { type: m[1], id: m[2], startMs: tm ? parseTime(tm[1]) : 0 };
+    const startMs = tm ? parseTime(tm[1]) : 0;
+    if (m[5]) return { type: "audio", url: m[5].replace(/[),.;]+$/, ""), startMs };
+    return { type: m[1] || m[3], id: m[2] || m[4], startMs };
   });
+}
+function directAudioUrl(s) {
+  try {
+    const u = new URL(s);
+    if (/(^|\.)dropbox\.com$/.test(u.hostname)) { u.searchParams.delete("dl"); u.searchParams.set("raw", "1"); }
+    return u.href;
+  } catch { return s; }
+}
+const stripExt = (name) => name.replace(/\.[a-z0-9]{2,5}$/i, "");
+function rowFromAudio(fields, startMs = 0) {
+  return {
+    key: uid(), album: "", art: "", ...fields,
+    startMs: Math.min(startMs, Math.max(0, fields.durationMs - 1000)),
+  };
+}
+async function audioRowFromLink(link, startMs) {
+  const url = directAudioUrl(link);
+  const u = new URL(url);
+  const last = decodeURIComponent(u.pathname.split("/").filter(Boolean).pop() || "");
+  let durationMs;
+  try { durationMs = await probeDuration(url); }
+  catch (e) { throw new Error(`Couldn’t use ${u.hostname} link: ${e.message}. Use a direct https link to the audio file.`); }
+  return rowFromAudio({ src: "url", url, name: stripExt(last) || u.hostname, artists: u.hostname.replace(/^www\./, ""), durationMs }, startMs);
+}
+async function addFiles(files) {
+  const audioFiles = [...files].filter((f) => f.type.startsWith("audio/") || /\.(mp3|m4a|aac|wav|ogg|oga|opus|flac)$/i.test(f.name));
+  if (!audioFiles.length) return toast("Those aren’t audio files.");
+  navigator.storage?.persist?.().catch(() => {});
+  let added = 0;
+  for (const f of audioFiles) {
+    const url = URL.createObjectURL(f);
+    try {
+      const durationMs = await probeDuration(url);
+      const fileId = uid() + uid();
+      await fileDb.put(fileId, f);
+      objectUrls.set(fileId, url);
+      list.push(rowFromAudio({ src: "file", fileId, name: stripExt(f.name), artists: "File on this computer", durationMs }));
+      added++;
+      saveList(); renderList();
+    } catch (e) {
+      URL.revokeObjectURL(url);
+      toast(`Couldn’t add ${f.name}: ${e.message}.`);
+    }
+  }
+  if (added) toast(`Added ${added} file${added === 1 ? "" : "s"}.`);
 }
 async function fetchPlaylist(id) {
   let page;
@@ -660,13 +862,15 @@ async function fetchPlaylist(id) {
 }
 async function addFromText(text) {
   const items = parseLinks(text);
-  if (!items.length) { toast("Paste a Spotify song or playlist link."); return false; }
+  if (!items.length) { toast("Paste a Spotify link or a link to an audio file."); return false; }
   $("#add-btn").disabled = true;
   $("#add-btn").textContent = "Adding…";
   let added = 0, lastErr = null;
   for (const it of items) {
     try {
-      if (it.type === "track") {
+      if (it.type === "audio") {
+        list.push(await audioRowFromLink(it.url, it.startMs)); added++;
+      } else if (it.type === "track") {
         const t = await api(`/tracks/${it.id}?market=from_token`);
         list.push(rowFromTrack(t, it.id, it.startMs)); added++;
       } else {
@@ -690,13 +894,17 @@ function rowHtml(r, i) {
   const left = r.durationMs - r.startMs;
   const playing = preview.key === r.key;
   const flags = [];
-  if (r.unavailable) flags.push('<span class="flag bad">Not available in your region, will be skipped</span>');
+  if (r.unavailable) flags.push(r.src === "file"
+    ? '<span class="flag bad">File isn’t saved in this browser, will be skipped. Add it again.</span>'
+    : '<span class="flag bad">Not available in your region, will be skipped</span>');
+  else if (r.src === "file") flags.push('<span class="flag">Audio file</span>');
+  else if (r.src === "url") flags.push('<span class="flag">Audio link</span>');
   if (r.relinked) flags.push('<span class="flag">Spotify swapped in a different version for your region</span>');
-  if (left < segMs()) flags.push(`<span class="flag bad">Only ${fmt(Math.max(0, left))} left from this start</span>`);
+  if (left < lenMs(r)) flags.push(`<span class="flag bad">Only ${fmt(Math.max(0, left))} left from this start</span>`);
   return `<li class="row${playing ? " is-playing" : ""}" data-key="${r.key}">
     <button class="grip" type="button" aria-label="Move ${esc(r.name)}. Use Alt plus arrow keys." title="Drag to reorder">${GRIP}</button>
     <span class="num">${i + 1}</span>
-    <img class="art" src="${esc(r.art)}" alt="" loading="lazy">
+    ${r.art ? `<img class="art" src="${esc(r.art)}" alt="" loading="lazy">` : '<span class="art noart" aria-hidden="true">♪</span>'}
     <div class="meta">
       <div class="title" title="${esc(r.name)}">${esc(r.name)}</div>
       <div class="sub" title="${esc(r.album)}">${esc(r.artists)}</div>
@@ -707,6 +915,7 @@ function rowHtml(r, i) {
       <input class="ts" data-act="ts" value="${fmt(r.startMs)}" inputmode="numeric" aria-label="Start time for ${esc(r.name)}">
       <button class="icon" type="button" data-act="nudge" data-d="1000" aria-label="Start one second later">+</button>
       <span class="len">of ${fmt(r.durationMs)}</span>
+      <label class="seglen" title="How long this song plays. Leave empty to use the default from Settings.">for <input class="ts segin" data-act="seg" value="${r.lenSec || ""}" placeholder="${settings.segSec}" inputmode="numeric" aria-label="Seconds to play ${esc(r.name)}">s</label>
     </div>
     <div class="acts">
       <button class="btn small${playing ? " primary" : ""}" type="button" data-act="preview">${playing ? "Stop" : "Play"}</button>
@@ -718,8 +927,9 @@ function rowHtml(r, i) {
 function renderList() {
   $("#list").innerHTML = list.map(rowHtml).join("");
   $("#empty").hidden = list.length > 0;
-  const n = list.filter((r) => !r.unavailable).length;
-  $("#summary").innerHTML = n ? `<b>${n} song${n === 1 ? "" : "s"}</b>, ${fmt(n * segMs())} total` : "Add songs to begin";
+  const playable = list.filter((r) => !r.unavailable), n = playable.length;
+  const total = playable.reduce((t, r) => t + lenMs(r), 0);
+  $("#summary").innerHTML = n ? `<b>${n} song${n === 1 ? "" : "s"}</b>, ${fmt(total)} total` : "Add songs to begin";
   updateButtons();
 }
 function updateRow(r) {
@@ -727,7 +937,8 @@ function updateRow(r) {
   if (li) li.outerHTML = rowHtml(r, list.indexOf(r));
 }
 function updateButtons() {
-  const ready = !!deviceId && list.some((r) => !r.unavailable);
+  const playable = list.filter((r) => !r.unavailable);
+  const ready = playable.length > 0 && (!!deviceId || playable.every(isAudio));
   $("#start-btn").disabled = !ready;
 }
 function findRow(el) {
@@ -737,7 +948,7 @@ function findRow(el) {
 function setStart(r, ms) {
   r.startMs = Math.max(0, Math.min(Math.round(ms), r.durationMs - 1000));
   saveList(); updateRow(r);
-  if (preview.key === r.key) player?.seek(r.startMs).catch(() => {});
+  if (preview.key === r.key) activeCh?.seek(r.startMs);
 }
 function moveRow(r, delta) {
   const i = list.indexOf(r), j = i + delta;
@@ -762,29 +973,28 @@ function hideNowBar() { $("#nowbar").hidden = true; }
 async function startPreview(r) {
   unlockAudio();
   cancelTest();
-  if (!deviceId) return toast("The Spotify player isn’t ready yet.");
+  if (!isAudio(r) && !deviceId) return toast("The Spotify player isn’t ready yet.");
   preview.key = r.key;
   renderList();
   showNowBar(r, "preview");
   try {
-    cancelFade(); setVolumeNow(settings.volume);
-    await playAt(r.playUri, r.startMs);
+    cancelFades();
+    await startOn(r, r.startMs);
   } catch (e) {
+    if (interrupted(e) || preview.key !== r.key) return;
     toast(e.message);
     preview.key = null; renderList(); hideNowBar();
   }
 }
 async function stopAll() {
-  const wasPlaying = preview.key || testing;
   preview.key = null;
-  cancelTest(); cancelFade();
+  cancelTest();
   hideNowBar(); renderList();
-  if (wasPlaying) { try { await player?.pause(); } catch {} }
-  setVolumeNow(settings.volume);
+  stopChannels();
 }
 async function markRow(r) {
   if (!isOnRow(r)) return toast("Play this song first, then mark the moment you want.");
-  const s = await player.getCurrentState().catch(() => null);
+  const s = isAudio(r) ? null : await player.getCurrentState().catch(() => null);
   const pos = s ? s.position : livePos();
   setStart(r, Math.round(pos / 100) * 100);
   toast(`${r.name} now starts at ${fmt(r.startMs)}.`);
@@ -794,33 +1004,48 @@ let testId = 0, testing = false;
 function cancelTest() { testId++; testing = false; }
 async function testFade(i) {
   unlockAudio();
-  if (!deviceId) return toast("The Spotify player isn’t ready yet.");
+  const a = list[i], b = list[i + 1];
+  if ((!isAudio(a) || !isAudio(b)) && !deviceId) return toast("The Spotify player isn’t ready yet.");
   preview.key = null; renderList();
   const id = ++testId; testing = true;
-  const a = list[i], b = list[i + 1];
-  const fade = fadeOutMs(), lead = Math.max(fade + 4000, 6000);
-  showNowBar(a, "test", `Fade test into ${b.name}`);
+  const fadeMs = fadeOutMs(), lead = Math.max(fadeMs + 4000, 6000);
+  const lap = canOverlap(a, b);
+  showNowBar(a, "test", `${lap ? "Overlap" : "Fade"} test into ${b.name}`);
   const alive = () => id === testId;
   try {
-    cancelFade(); setVolumeNow(settings.volume);
-    await playAt(a.playUri, Math.max(0, a.startMs + segMs() - lead));
-    await sleep(lead - fade); if (!alive()) return;
-    await fadeTo(0, fade); if (!alive()) return;
-    showNowBar(b, "test", "Fade test");
-    await playAt(b.playUri, b.startMs); if (!alive()) return;
-    await fadeTo(settings.volume, fadeInMs()); if (!alive()) return;
+    cancelFades();
+    const chA = await startOn(a, Math.max(0, a.startMs + lenMs(a) - lead));
+    await sleep(lead - fadeMs); if (!alive()) return;
+    let chB;
+    if (lap) {
+      fade(chA, 0, fadeMs);
+      chB = await startOn(b, b.startMs, { keep: chA, level: 0 }); if (!alive()) return;
+      showNowBar(b, "test", "Overlap test");
+      await fade(chB, 1, fadeMs); if (!alive()) return;
+      chA.stop();
+    } else {
+      await fade(chA, 0, fadeMs); if (!alive()) return;
+      showNowBar(b, "test", "Fade test");
+      chB = await startOn(b, b.startMs, { level: 0 }); if (!alive()) return;
+      await fade(chB, 1, fadeInMs()); if (!alive()) return;
+    }
     await sleep(6000); if (!alive()) return;
-    await fadeTo(0, 800); if (!alive()) return;
-    await player.pause();
-    setVolumeNow(settings.volume);
+    await fade(chB, 0, 800); if (!alive()) return;
+    stopChannels();
     testing = false; hideNowBar();
   } catch (e) {
-    if (alive()) { toast(e.message); testing = false; hideNowBar(); setVolumeNow(settings.volume); }
+    if (alive() && !interrupted(e)) { toast(e.message); testing = false; hideNowBar(); stopChannels(); }
   }
 }
 
 /* ---------- Run mode ---------- */
-const run = { active: false, queue: [], idx: 0, segStart: 0, paused: false, pausedAt: 0, fadingOut: false, timer: null, wake: null, done: false };
+const run = {
+  active: false, queue: [], starts: [], total: 0, idx: 0, segStart: 0, paused: false, pausedAt: 0,
+  fadingOut: false, timer: null, wake: null, done: false,
+  ch: null,        // channel playing the current song
+  pre: null,       // { idx, ch, ready } for a next song started early to overlap
+  preToken: 0, pausedChs: [],
+};
 
 async function acquireWake() {
   try { run.wake = await navigator.wakeLock?.request("screen"); } catch {}
@@ -834,12 +1059,14 @@ async function startRun() {
   await stopAll();
   run.queue = list.filter((r) => !r.unavailable);
   if (!run.queue.length) return;
-  Object.assign(run, { active: true, idx: 0, paused: false, fadingOut: false, done: false });
+  let t = 0;
+  run.starts = run.queue.map((r) => { const s = t; t += lenMs(r); return s; });
+  run.total = t;
+  Object.assign(run, { active: true, idx: 0, paused: false, fadingOut: false, done: false, ch: null, pre: null });
   showView("run");
   $("#run-controls").hidden = false; $("#run-done").hidden = true;
   $(".run").classList.remove("is-paused");
   acquireWake();
-  setVolumeNow(0);
   renderRun();
   for (let n = 3; n > 0; n--) {
     $("#clock").textContent = n;
@@ -850,42 +1077,71 @@ async function startRun() {
   beginSegment(0);
   run.timer = setInterval(tick, 100);
 }
-async function beginSegment(i) {
+async function beginSegment(i, preCh = null) {
   run.idx = i; run.fadingOut = false;
   const r = run.queue[i];
   renderRun();
   if (settings.drinkCue && i > 0) flashDrink();
-  cancelFade(); setVolumeNow(0);
-  try { await playAt(r.playUri, r.startMs); }
-  catch (e) { toast(`Couldn’t play ${r.name}: ${e.message}`); }
+  if (preCh) {
+    // Already playing from the overlap; retire the previous song's channel.
+    if (run.ch && run.ch !== preCh) run.ch.stop();
+    run.ch = preCh; activeCh = preCh;
+    return;
+  }
+  run.preToken++; run.pre = null;
+  cancelFades();
+  const starting = startOn(r, r.startMs, { level: 0 });
+  run.ch = activeCh;
+  try { await starting; }
+  catch (e) { if (!interrupted(e) && run.active && run.idx === i) toast(`Couldn’t play ${r.name}: ${e.message}`); return; }
   if (!run.active || run.idx !== i) return;
-  if (run.paused) { player.pause().catch(() => {}); return; }
-  if (!run.fadingOut) fadeTo(settings.volume, fadeInMs());
+  if (run.paused) { run.ch.pause(); return; }
+  if (!run.fadingOut) fade(run.ch, 1, fadeInMs());
+}
+// Start the next song now, fading in over `ms` while the current one fades out.
+function startEarly(i, ms) {
+  const r = run.queue[i], token = ++run.preToken;
+  const starting = startOn(r, r.startMs, { keep: run.ch, level: 0 });
+  const ch = activeCh;
+  run.pre = { idx: i, ch, ready: false };
+  starting.then(() => {
+    if (token !== run.preToken || !run.active) { if (ch !== run.ch) ch.stop(); return; }
+    run.pre.ready = true;
+    if (run.paused) ch.pause(); else fade(ch, 1, ms);
+  }, (e) => {
+    if (token !== run.preToken || interrupted(e)) return;
+    run.pre = null;
+    toast(`Couldn’t play ${r.name}: ${e.message}`);
+  });
 }
 function tick() {
   if (!run.active) return;
   if (!run.paused) {
     const now = performance.now();
-    const rem = run.segStart + segMs() - now;
+    const cur = run.queue[run.idx], next = run.queue[run.idx + 1];
+    const rem = run.segStart + lenMs(cur) - now;
     if (!run.fadingOut && fadeOutMs() > 0 && rem <= fadeOutMs()) {
       run.fadingOut = true;
-      fadeTo(0, Math.max(0, rem));
+      if (run.ch) fade(run.ch, 0, Math.max(0, rem));
+      if (next && canOverlap(cur, next)) startEarly(run.idx + 1, Math.max(0, rem));
     }
     if (rem <= 0) {
       if (run.idx + 1 >= run.queue.length) return finishRun();
-      run.segStart += segMs();
+      run.segStart += lenMs(cur);
       if (now - run.segStart > 1000) run.segStart = now; // recover if the tab was asleep
-      beginSegment(run.idx + 1);
+      const pre = run.pre && run.pre.idx === run.idx + 1 && run.pre.ready ? run.pre.ch : null;
+      run.pre = null;
+      beginSegment(run.idx + 1, pre);
     }
   }
   updateClock();
 }
 function updateClock() {
+  const len = lenMs(run.queue[run.idx]);
   const now = run.paused ? run.pausedAt : performance.now();
-  const elapsed = Math.max(0, Math.min(segMs(), now - run.segStart));
-  $("#clock").textContent = Math.ceil((segMs() - elapsed) / 1000);
-  const total = run.queue.length * segMs();
-  $("#run-progress").style.width = ((run.idx * segMs() + elapsed) / total * 100).toFixed(2) + "%";
+  const elapsed = Math.max(0, Math.min(len, now - run.segStart));
+  $("#clock").textContent = Math.ceil((len - elapsed) / 1000);
+  $("#run-progress").style.width = ((run.starts[run.idx] + elapsed) / run.total * 100).toFixed(2) + "%";
 }
 function renderRun() {
   const r = run.queue[run.idx], next = run.queue[run.idx + 1];
@@ -902,14 +1158,18 @@ function togglePause() {
   unlockAudio();
   if (!run.paused) {
     run.paused = true; run.pausedAt = performance.now();
-    cancelFade();
-    player.pause().catch(() => {});
+    cancelFades();
+    run.pausedChs = channels.filter((c) => c.key);
+    for (const c of run.pausedChs) c.pause();
   } else {
     run.segStart += performance.now() - run.pausedAt;
     run.paused = false;
-    player.resume().catch(() => {});
-    const rem = run.segStart + segMs() - performance.now();
-    if (run.fadingOut) fadeTo(0, Math.max(0, rem)); else fadeTo(settings.volume, 300);
+    for (const c of run.pausedChs) c.resume();
+    const rem = Math.max(0, run.segStart + lenMs(run.queue[run.idx]) - performance.now());
+    if (run.fadingOut) {
+      if (run.ch) fade(run.ch, 0, rem);
+      if (run.pre?.ready) fade(run.pre.ch, 1, rem);
+    } else if (run.ch) fade(run.ch, 1, 300);
   }
   renderRun(); updateClock();
 }
@@ -931,10 +1191,9 @@ function flashDrink() {
 }
 async function finishRun() {
   clearInterval(run.timer);
-  run.done = true;
-  await fadeTo(0, 1500);
-  player.pause().catch(() => {});
-  setVolumeNow(settings.volume);
+  run.done = true; run.preToken++;
+  if (run.ch) await fade(run.ch, 0, 1500);
+  stopChannels();
   $("#clock").textContent = "Done";
   $("#run-progress").style.width = "100%";
   $("#run-next").textContent = `That’s all ${run.queue.length}. Nicely done.`;
@@ -943,11 +1202,10 @@ async function finishRun() {
 }
 async function endRun() {
   clearInterval(run.timer);
-  run.active = false; run.done = false;
-  cancelFade();
-  await fadeTo(0, 600);
-  player?.pause().catch(() => {});
-  setVolumeNow(settings.volume);
+  run.active = false; run.done = false; run.preToken++;
+  cancelFades();
+  if (run.ch) await fade(run.ch, 0, 600);
+  stopChannels();
   try { await run.wake?.release(); } catch {}
   showView("main");
   renderList();
@@ -971,6 +1229,7 @@ async function importFile(file) {
     if (list.length && !confirm(`Replace your current list with ${data.songs.length} songs from this file?`)) return;
     list = data.songs.map((r) => ({ ...r, key: uid() }));
     saveList(); renderList();
+    await checkFiles(); pruneFiles();
     toast(`Imported ${list.length} songs.`);
   } else {
     await addFromText(text);
@@ -978,13 +1237,29 @@ async function importFile(file) {
 }
 
 /* ---------- Wiring ---------- */
+let mainBound = false;
 function bindMain() {
+  if (mainBound) return;
+  mainBound = true;
   $("#add-form").onsubmit = async (e) => {
     e.preventDefault();
     if (await addFromText($("#add-input").value)) $("#add-input").value = "";
   };
   $("#add-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) $("#add-form").requestSubmit();
+  });
+  $("#file-btn").onclick = () => $("#audio-file").click();
+  $("#audio-file").onchange = (e) => { const fs = [...e.target.files]; e.target.value = ""; if (fs.length) addFiles(fs); };
+  const form = $("#add-form");
+  form.addEventListener("dragover", (e) => {
+    if (![...e.dataTransfer.types].includes("Files")) return;
+    e.preventDefault(); form.classList.add("drag");
+  });
+  form.addEventListener("dragleave", (e) => { if (!form.contains(e.relatedTarget)) form.classList.remove("drag"); });
+  form.addEventListener("drop", (e) => {
+    form.classList.remove("drag");
+    if (!e.dataTransfer.files.length) return;
+    e.preventDefault(); addFiles(e.dataTransfer.files);
   });
 
   const L = $("#list");
@@ -1000,10 +1275,21 @@ function bindMain() {
     else if (act === "remove") {
       if (preview.key === r.key) stopAll();
       list.splice(list.indexOf(r), 1);
-      saveList(); renderList();
+      saveList(); renderList(); pruneFiles();
     }
   });
   L.addEventListener("change", (e) => {
+    if (e.target.matches(".segin")) {
+      const r = findRow(e.target), v = e.target.value.trim();
+      if (!v) delete r.lenSec;
+      else {
+        const n = Math.round(+v);
+        if (!(n >= 5 && n <= 600)) { e.target.setAttribute("aria-invalid", "true"); toast("Use a length from 5 to 600 seconds, or leave it empty for the default."); return; }
+        r.lenSec = n;
+      }
+      saveList(); renderList();
+      return;
+    }
     if (!e.target.matches(".ts")) return;
     const r = findRow(e.target);
     const ms = parseTime(e.target.value);
@@ -1030,8 +1316,7 @@ function bindMain() {
   }
 
   $("#nb-stop").onclick = stopAll;
-  $("#nb-back").onclick = () => player?.seek(Math.max(0, livePos() - 5000));
-  $("#nb-fwd").onclick = () => player?.seek(livePos() + 5000);
+  for (const b of document.querySelectorAll("[data-seek]")) b.onclick = () => activeCh?.seek(livePos() + +b.dataset.seek);
   $("#nb-mark").onclick = () => { const r = list.find((x) => x.key === preview.key); if (r) markRow(r); };
   setInterval(() => { if (!$("#nowbar").hidden) $("#nb-pos").textContent = fmt(livePos()); }, 250);
 
@@ -1049,24 +1334,25 @@ function bindMain() {
   });
 
   // Settings
-  const seg = $("#set-seg"), fade = $("#set-fade"), vol = $("#set-vol"), drink = $("#set-drink");
+  const seg = $("#set-seg"), fadeIn = $("#set-fade"), vol = $("#set-vol"), drink = $("#set-drink"), overlap = $("#set-overlap");
   const showVals = () => {
     $("#fade-val").textContent = settings.fadeSec ? settings.fadeSec + "s" : "off";
     $("#vol-val").textContent = Math.round(settings.volume * 100) + "%";
   };
-  seg.value = settings.segSec; fade.value = settings.fadeSec; vol.value = Math.round(settings.volume * 100); drink.checked = settings.drinkCue;
+  seg.value = settings.segSec; fadeIn.value = settings.fadeSec; vol.value = Math.round(settings.volume * 100); drink.checked = settings.drinkCue; overlap.checked = settings.overlap;
   showVals();
   seg.onchange = () => { settings.segSec = Math.max(10, Math.min(300, Math.round(+seg.value) || 60)); seg.value = settings.segSec; saveSettings(); renderList(); };
-  fade.oninput = () => { settings.fadeSec = +fade.value; saveSettings(); showVals(); };
-  vol.oninput = () => { settings.volume = +vol.value / 100; saveSettings(); showVals(); if (!testing) setVolumeNow(settings.volume); };
+  fadeIn.oninput = () => { settings.fadeSec = +fadeIn.value; saveSettings(); showVals(); };
+  vol.oninput = () => { settings.volume = +vol.value / 100; saveSettings(); showVals(); applyVolume(); };
   drink.onchange = () => { settings.drinkCue = drink.checked; saveSettings(); };
+  overlap.onchange = () => { settings.overlap = overlap.checked; saveSettings(); };
 
   $("#export-btn").onclick = exportList;
   $("#import-btn").onclick = () => $("#import-file").click();
   $("#import-file").onchange = (e) => { const f = e.target.files[0]; if (f) importFile(f); e.target.value = ""; };
   $("#clear-btn").onclick = () => {
     if (!list.length || !confirm("Remove every song from the list?")) return;
-    stopAll(); list = []; saveList(); renderList();
+    stopAll(); list = []; saveList(); renderList(); pruneFiles();
   };
   $("#signout").onclick = () => signOut();
   $("#change-app").onclick = changeApp;
@@ -1083,6 +1369,7 @@ async function boot() {
   showView("main");
   bindMain();
   renderList();
+  checkFiles();
   connectPlayer();
 }
 

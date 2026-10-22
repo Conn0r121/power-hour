@@ -82,15 +82,19 @@ Open `http://127.0.0.1:8000/` (not `localhost`).
 ## Using it
 
 - Paste Spotify song or playlist links into **Add songs**. A time after a link sets its start: `https://open.spotify.com/track/… 1:23`.
+- Audio files work too: paste a direct `https://` link to an MP3 (or other audio file; Dropbox share links are converted automatically), or use **add MP3s from this computer** / drag files onto the box. Uploaded files are stored in that browser only (IndexedDB); **Export** saves the list but not the files themselves, so on another computer they're flagged until you add them again.
+- Each row's **for __ s** box sets how long that song plays. Leave it empty to use the default from Settings.
 - Drag the handle to reorder (or focus it and use Alt + arrow keys).
-- **Play** previews from the start time. While it plays, **Mark start here** sets the start to the current spot; −5s / +5s scrub.
-- **Test fade** plays the end of a song fading into the next.
+- **Play** previews from the start time. While it plays, **Mark start here** sets the start to the current spot; −5s / −1s / +1s / +5s scrub.
+- **Overlap** (Settings, on by default): when an audio file is on either side of a change, the next track starts during the fade so the two crossfade. Spotify → Spotify can't overlap (Spotify plays one stream at a time), so those fade out, then in.
+- **Test fade** plays the end of a song fading (or overlapping) into the next.
 - Rows warn if a song is unavailable in your region, if Spotify substituted a different version, or if the start is too late for a full minute.
 - The list saves in the browser automatically. **Export** / **Import** in Settings moves it between computers.
 - During the hour: Space pauses, arrow keys skip. Keep the tab open; the screen is kept awake where the browser allows it.
 
 ## Known limits
 
-- Fades are fade-out then fade-in, not an overlapping crossfade. Spotify plays one stream per account.
+- Two Spotify songs in a row fade out then in rather than overlapping; Spotify plays one stream per account. Overlaps work whenever an audio file is involved.
+- Audio links must allow direct playback (no login page or download wrapper). Google Drive share links usually don't work.
 - Spotify-made editorial playlists can't be imported; paste the songs individually or copy them into your own playlist.
 - Development Mode caps each Spotify app at 5 users.
