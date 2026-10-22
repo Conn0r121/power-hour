@@ -445,7 +445,7 @@ function normalizeRow(r) {
   row.durationMs = Math.max(0, +row.durationMs || 0);
   row.startMs = Math.max(0, +row.startMs || 0);
   const n = Math.round(+row.lenSec);
-  if (n >= 5 && n <= 600) row.lenSec = n; else delete row.lenSec;
+  if (n >= 1 && n <= 600) row.lenSec = n; else delete row.lenSec;
   for (const k of ["fadeInSec", "fadeOutSec"]) {
     const v = row[k] == null || row[k] === "" ? NaN : +row[k];
     if (v >= 0 && v <= 10) row[k] = Math.round(v * 2) / 2; else delete row[k];
@@ -482,9 +482,10 @@ const saveList = () => store.set("list", list);
 const saveSettings = () => store.set("settings", settings);
 // Per-song length (row.lenSec) overrides the default from Settings.
 // Sound bites (row.bite) play to their end unless they set their own length.
-// A sound bite that starts early ends that much sooner, so by default it still ends with its audio.
+// Plays time: how long an item is heard, counted from when it starts (including any Start early).
+// Sound bites play to the end of their audio unless they set their own length.
 const lenMs = (r) => r.lenSec ? r.lenSec * 1000
-  : r.bite ? Math.max(1000, r.durationMs - r.startMs - (r.startEarlySec || 0) * 1000)
+  : r.bite ? Math.max(1000, r.durationMs - r.startMs)
   : settings.segSec * 1000;
 // Per-song fades (row.fadeInSec / row.fadeOutSec) override the defaults from Settings.
 const fadeInFor = (r) => (r.fadeInSec ?? settings.fadeInSec) * 1000;
@@ -1040,7 +1041,7 @@ function flagsHtml(r) {
 }
 // Per-song number fields: [min, max, step, what to say when invalid, default]
 const FIELDS = {
-  lenSec: [5, 600, 1, "a length from 5 to 600 seconds", (r) => (r.bite ? "all" : settings.segSec)],
+  lenSec: [1, 600, 1, "a length from 1 to 600 seconds", (r) => (r.bite ? "all" : settings.segSec)],
   fadeInSec: [0, 10, 0.5, "a fade from 0 to 10 seconds", () => settings.fadeInSec],
   fadeOutSec: [0, 10, 0.5, "a fade from 0 to 10 seconds", () => settings.fadeOutSec],
   volPct: [0, 300, 5, "a volume from 0 to 300%", () => 100],
@@ -1067,7 +1068,7 @@ function earlyField(r, i) {
     : bothSpotify(prev, r) ? "Spotify can’t play two songs at once, so a Spotify song can’t start early over another Spotify song."
     : "";
   return optField(r, "startEarlySec", "Start early",
-    why || "Start this many seconds before the previous item ends, layered over it. Its own countdown still starts when the previous one ends.", !!why);
+    why || "Start this many seconds before the previous item ends, layered over it. Plays counts from when it starts, so with Plays equal to Start early it ends exactly as the previous one does.", !!why);
 }
 function rowHtml(r, i) {
   const playing = preview.key === r.key;
@@ -1093,7 +1094,7 @@ function rowHtml(r, i) {
     </div>
     <div class="opts">
       <input class="note-in" data-field="note" value="${esc(r.note || "")}" maxlength="200" placeholder="Note shown during the hour, like “Picked by Sam”" aria-label="Note for ${esc(r.name)}">
-      ${optField(r, "lenSec", "Plays", "How long this song plays.")}
+      ${optField(r, "lenSec", "Plays", "How long this is heard in total, counted from when it starts (including any Start early).")}
       ${optField(r, "fadeInSec", "Fade in", "How long this song takes to fade in.")}
       <label class="opt" title="Sound bites don’t count as songs: no countdown, no Drink flash, and Next up skips them."><input type="checkbox" data-field="bite"${r.bite ? " checked" : ""}> Sound bite</label>
       ${optField(r, "fadeOutSec", "Fade out", "How long this song takes to fade out, ending when its time is up.")}
@@ -1106,7 +1107,7 @@ function rowHtml(r, i) {
 function renderSummary() {
   const playable = list.filter((r) => !r.unavailable);
   const n = playable.filter((r) => !r.bite).length, bites = playable.length - n;
-  const total = playable.reduce((t, r) => t + lenMs(r), 0);
+  const plan = planTimeline(playable), total = plan.length ? plan[plan.length - 1].end : 0; // overlaps shorten the hour
   $("#summary").innerHTML = playable.length
     ? `<b>${n} song${n === 1 ? "" : "s"}</b>${bites ? `, ${bites} sound bite${bites === 1 ? "" : "s"}` : ""}, ${fmt(total)} total`
     : "Add songs to begin";
@@ -1193,62 +1194,160 @@ async function markRow(r) {
   toast(`${r.name} now starts at ${fmt(r.startMs)}.`);
 }
 
-let testId = 0, testing = false;
-function cancelTest() { testId++; testing = false; }
+/* ---------- Timeline engine (used by the power hour and by Test fade) ----------
+   Every item gets a start and an end. It is heard for exactly its Plays time, counted from
+   when it starts, so Start early eats into that time instead of adding to it. The next item
+   starts `early` before this one ends. On screen, item i's segment runs from the previous
+   item's end to its own end; an item that plays entirely during the previous one's ending
+   (e.g. a 10 s sound bite that starts 10 s early) has an empty segment and is skipped.
+   Each tick works out which items should be sounding and sets each one's volume from its
+   own fade-in/out, so pausing, seeking and skipping can never get out of step. */
+function planTimeline(items) {
+  let prevEnd = 0, prevLen = 0;
+  return items.map((r, i) => {
+    const len = lenMs(r);
+    const early = i === 0 ? 0 : Math.min(earlyFor(items[i - 1], r), len, prevLen);
+    const start = prevEnd - early, end = start + len;
+    const p = { r, start, end, segStart: prevEnd, fadeIn: Math.min(fadeInFor(r), len), fadeOut: Math.min(fadeOutFor(r), len) };
+    prevEnd = end; prevLen = len;
+    return p;
+  });
+}
+function envelope(p, T, cut) {
+  let v = 1;
+  if (p.fadeIn > 0) v = Math.min(v, (T - p.start) / p.fadeIn);
+  if (p.fadeOut > 0) v = Math.min(v, (p.end - T) / p.fadeOut);
+  if (cut && T > cut.at) v = Math.min(v, (cut.at + cut.ms - T) / cut.ms);
+  return clamp01(v);
+}
+function makeTimeline(items, hooks = {}) {
+  const plan = planTimeline(items);
+  const total = plan.length ? plan[plan.length - 1].end : 0;
+  return { plan, total, stopAt: total, cut: null, T: 0, base: 0, paused: true, done: false,
+           live: new Map(), token: 0, idx: -1, timer: null, quiet: false, hooks };
+}
+const tlNow = (tl) => (tl.paused ? tl.T : performance.now() - tl.base);
+function tlStart(tl, T = 0) {
+  tl.T = T; tl.base = performance.now() - T; tl.paused = false;
+  clearInterval(tl.timer);
+  tl.timer = setInterval(() => tlTick(tl), 50);
+  tlTick(tl);
+}
+function tlTick(tl) {
+  if (tl.done) return;
+  const T = tlNow(tl);
+  if (T >= tl.stopAt) return tlFinish(tl);
+  const want = new Set();
+  tl.plan.forEach((p, i) => { if (T >= p.start && T < p.end) want.add(i); });
+  for (const i of [...tl.live.keys()]) if (!want.has(i)) tl.live.delete(i);
+  for (const i of want) if (!tl.live.has(i)) tlLaunch(tl, i, T);
+  // Silence any channel no longer holding a live item.
+  const used = new Set([...tl.live.values()].map((e) => e.ch));
+  for (const c of channels) if (c.key && !used.has(c)) c.stop();
+  for (const [i, e] of tl.live) { e.ch.level = envelope(tl.plan[i], T, tl.cut); e.ch.apply(); }
+  let idx = tl.plan.findIndex((p) => T < p.end);
+  if (idx < 0) idx = tl.plan.length - 1;
+  if (idx !== tl.idx) { const from = tl.idx; tl.idx = idx; tl.hooks.onSegment?.(idx, from, tl.quiet); }
+  tl.quiet = false;
+  tl.hooks.onTick?.(T);
+}
+function tlLaunch(tl, i, T) {
+  const p = tl.plan[i], r = p.r;
+  const used = new Set([...tl.live.values()].map((e) => e.ch));
+  let ch = spotifyCh;
+  if (isAudio(r)) {
+    const pool = audioChs.filter((c) => c.pool === (r.src === "file" ? "file" : "url"));
+    ch = pool.find((c) => !used.has(c)) || pool[0];
+  }
+  for (const [j, e] of tl.live) if (e.ch === ch) tl.live.delete(j); // a channel holds one item
+  const ent = { ch, ready: false };
+  tl.live.set(i, ent);
+  setLevel(ch, envelope(p, T, tl.cut));
+  const token = tl.token;
+  ch.play(r, r.startMs + Math.max(0, T - p.start)).then(() => {
+    if (token !== tl.token || tl.live.get(i) !== ent) return;
+    ent.ready = true;
+    if (tl.paused) ch.pause();
+  }, (e) => {
+    if (token !== tl.token || tl.live.get(i) !== ent || interrupted(e)) return;
+    toast(`Couldn’t play ${r.name}: ${e.message}`);
+  });
+}
+function tlPause(tl) {
+  if (tl.paused || tl.done) return;
+  tl.T = tlNow(tl); tl.paused = true;
+  clearInterval(tl.timer);
+  for (const e of tl.live.values()) e.ch.pause();
+}
+function tlResume(tl) {
+  if (!tl.paused || tl.done) return;
+  for (const e of tl.live.values()) if (e.ready) e.ch.resume();
+  tlStart(tl, tl.T);
+}
+// Jump to time T. Items are restarted at the right spot on the next tick.
+function tlSeek(tl, T) {
+  if (tl.done) return;
+  tl.token++; tl.live.clear(); tl.quiet = true;
+  tl.T = Math.max(0, Math.min(T, tl.total - 1));
+  tl.base = performance.now() - tl.T;
+  tlTickAt(tl);
+}
+// Run one tick at the timeline's current time even while paused, then re-pause what it started.
+function tlTickAt(tl) {
+  const wasPaused = tl.paused;
+  if (wasPaused) { tl.paused = false; tl.base = performance.now() - tl.T; }
+  tlTick(tl);
+  if (wasPaused) { tl.T = tlNow(tl); tl.paused = true; for (const e of tl.live.values()) e.ch.pause(); }
+}
+function tlStop(tl) {
+  if (!tl) return;
+  tl.done = true; tl.token++;
+  clearInterval(tl.timer);
+  tl.live.clear();
+  stopChannels();
+}
+function tlFinish(tl) {
+  tlStop(tl);
+  tl.hooks.onDone?.();
+}
+// Fade everything out over `ms`, then finish.
+function tlFadeOut(tl, ms) {
+  const T = tlNow(tl);
+  tl.cut = { at: T, ms };
+  tl.stopAt = Math.min(tl.stopAt, T + ms);
+  if (tl.paused) tlFinish(tl);
+}
+
+/* ---------- Transition test ---------- */
+let testTl = null, testing = false;
+function cancelTest() { if (testTl) { const t = testTl; testTl = null; t.hooks = {}; tlStop(t); } testing = false; }
 async function testFade(i) {
   unlockAudio();
   const a = list[i], b = list[i + 1];
   if ((!isAudio(a) || !isAudio(b)) && !deviceId) return toast("The Spotify player isn’t ready yet.");
   preview.key = null; renderList();
-  const id = ++testId; testing = true;
-  // What the run would actually play: its length, cut short if the audio runs out first.
-  const segA = Math.min(lenMs(a), a.durationMs - a.startMs), segB = Math.min(lenMs(b), b.durationMs - b.startMs);
-  const outA = Math.min(fadeOutFor(a), segA), inB = fadeInFor(b);
-  const early = Math.min(earlyFor(a, b), segA);
-  const lead = Math.min(segA, Math.max(outA + 4000, early + 4000, 6000)); // how much of a's ending to hear
-  const tailB = Math.min(segB, Math.max(inB + 4000, 6000));                // how much of b after a ends
-  const bEnds = tailB === segB;                                            // b's time ends inside the test
-  const outB = bEnds ? Math.min(fadeOutFor(b), segB) : 800;
-  showNowBar(a, "test", `Transition test into ${b.name}${early ? ` (starts ${early / 1000}s early)` : ""}`);
-  const alive = () => id === testId;
-  try {
-    cancelFades();
-    const fromStart = lead === segA; // a is short: play it from its start, with its fade-in
-    const chA = await startOn(a, a.startMs + segA - lead, { level: fromStart ? 0 : 1 }); if (!alive()) return;
-    if (fromStart) fade(chA, 1, fadeInFor(a));
-    const t0 = performance.now();
-    const at = (ms) => sleep(Math.max(0, t0 + ms - performance.now()));
-    // Timeline, relative to now: a fades out to end at `lead`; b starts at lead - early.
-    const events = [[lead - outA, "fadeA"], [lead - early, "startB"]].sort((x, y) => x[0] - y[0]);
-    let chB = null;
-    for (const [when, what] of events) {
-      await at(when); if (!alive()) return;
-      if (what === "fadeA") fade(chA, 0, outA);
-      else {
-        chB = await startOn(b, b.startMs, { keep: chA, level: 0 }); if (!alive()) return;
-        fade(chB, 1, inB);
-        showNowBar(b, "test", "Transition test");
-      }
-    }
-    await at(lead); if (!alive()) return;                    // a's time is up
-    if (chA !== chB) chA.stop();
-    await at(lead + tailB - outB); if (!alive()) return;     // b fades out (its own fade if it ends here)
-    await fade(chB, 0, outB); if (!alive()) return;
-    stopChannels();
-    testing = false; hideNowBar();
-  } catch (e) {
-    if (alive() && !interrupted(e)) { toast(e.message); testing = false; hideNowBar(); stopChannels(); }
-  }
+  cancelTest(); stopChannels();
+  const tl = makeTimeline([a, b], {
+    onSegment(idx) { showNowBar(tl.plan[idx].r, "test", idx === 0 ? `Transition test into ${b.name}` : "Transition test"); },
+    onTick() { // the bar's clock follows whichever item started most recently
+      const ks = [...tl.live.keys()];
+      if (ks.length) activeCh = tl.live.get(Math.max(...ks)).ch;
+    },
+    onDone() { if (testTl === tl) { testTl = null; testing = false; hideNowBar(); } },
+  });
+  const [pa, pb] = tl.plan;
+  const early = pa.end - pb.start;
+  // Hear a's ending (enough to cover its fade-out and b's early start), then a few seconds of b.
+  const startT = Math.max(0, pa.end - Math.max(Math.max(pa.fadeOut, early) + 4000, 6000));
+  const stopT = Math.min(pb.end, pa.end + Math.max(pb.fadeIn - early, 0) + 5000);
+  tl.stopAt = stopT;
+  if (stopT < pb.end) tl.cut = { at: stopT - 800, ms: 800 };
+  testTl = tl; testing = true;
+  tlStart(tl, startT);
 }
 
 /* ---------- Run mode ---------- */
-const run = {
-  active: false, queue: [], after: [], songNo: [], songs: 0, idx: 0, segStart: 0, paused: false, pausedAt: 0,
-  fadingOut: false, timer: null, wake: null, done: false,
-  ch: null,        // channel playing the current song
-  pre: null,       // { idx, ch, ready } for a next song started early to overlap
-  preToken: 0, pausedChs: [],
-};
+const run = { active: false, done: false, queue: [], songNo: [], songs: 0, idx: 0, tl: null, wake: null, scrubbing: false };
 
 async function acquireWake() {
   try { run.wake = await navigator.wakeLock?.request("screen"); } catch {}
@@ -1262,103 +1361,43 @@ async function startRun() {
   await stopAll();
   run.queue = list.filter((r) => !r.unavailable);
   if (!run.queue.length) return;
-  // after[i]: time left in the hour once item i ends. songNo[i]: which real song item i is.
-  let t = 0, n = 0;
-  run.after = run.queue.map(() => 0);
-  for (let i = run.queue.length - 1; i >= 0; i--) { run.after[i] = t; t += lenMs(run.queue[i]); }
+  let n = 0;
   run.songNo = run.queue.map((r) => (r.bite ? 0 : ++n));
   run.songs = n;
-  Object.assign(run, { active: true, idx: 0, paused: false, fadingOut: false, done: false, ch: null, pre: null });
+  const tl = makeTimeline(run.queue, {
+    onSegment(idx, from, quiet) {
+      run.idx = idx;
+      // A real song just ended on its own (sound bites skipped in between don't matter).
+      if (!quiet && from >= 0 && settings.drinkCue && !run.queue[from].bite) flashDrink();
+      renderRun();
+    },
+    onTick: () => updateClock(),
+    onDone: () => finishRun(),
+  });
+  Object.assign(run, { active: true, done: false, idx: 0, tl });
   showView("run");
   $("#run-controls").hidden = false; $("#run-done").hidden = true;
-  $(".run").classList.remove("is-paused");
   acquireWake();
   renderRun();
   $(".run").classList.remove("is-bite"); // show the 3-2-1 even if the first item is a sound bite
   $("#run-progress").style.width = "0%";
-  $("#run-left").textContent = fmt(run.after[0] + lenMs(run.queue[0])) + " left";
-  for (let n = 3; n > 0; n--) {
-    $("#clock").textContent = n;
+  $("#run-left").textContent = fmt(tl.total) + " left";
+  for (let k = 3; k > 0; k--) {
+    $("#clock").textContent = k;
     await sleep(1000);
-    if (!run.active) return;
+    if (!run.active || run.tl !== tl) return;
   }
-  run.segStart = performance.now();
-  beginSegment(0);
-  run.timer = setInterval(tick, 100);
+  tlStart(tl, 0);
 }
-async function beginSegment(i, preCh = null) {
-  run.idx = i; run.fadingOut = false;
-  const r = run.queue[i];
-  renderRun();
-  if (preCh) {
-    // Already playing from the overlap; retire the previous song's channel.
-    if (run.ch && run.ch !== preCh) run.ch.stop();
-    run.ch = preCh; activeCh = preCh;
-    run.segAudio = r.startMs + (i > 0 ? earlyFor(run.queue[i - 1], r) : 0);
-    return;
-  }
-  run.preToken++; run.pre = null; run.earlyIdx = -1;
-  cancelFades();
-  run.segAudio = r.startMs;
-  const starting = startOn(r, r.startMs, { level: 0 });
-  run.ch = activeCh;
-  try { await starting; }
-  catch (e) { if (!interrupted(e) && run.active && run.idx === i) toast(`Couldn’t play ${r.name}: ${e.message}`); return; }
-  if (!run.active || run.idx !== i) return;
-  if (run.paused) { run.ch.pause(); return; }
-  if (!run.fadingOut) fade(run.ch, 1, fadeInFor(r));
-}
-// Start the next song now, fading in over its own fade-in while the current one fades out.
-function startEarly(i) {
-  const r = run.queue[i], token = ++run.preToken;
-  const starting = startOn(r, r.startMs, { keep: run.ch, level: 0 });
-  const ch = activeCh;
-  run.pre = { idx: i, ch, ready: false };
-  starting.then(() => {
-    if (token !== run.preToken || !run.active) { if (ch !== run.ch) ch.stop(); return; }
-    run.pre.ready = true;
-    if (run.paused) ch.pause(); else fade(ch, 1, fadeInFor(r));
-  }, (e) => {
-    if (token !== run.preToken || interrupted(e)) return;
-    run.pre = null;
-    toast(`Couldn’t play ${r.name}: ${e.message}`);
-  });
-}
-function tick() {
-  if (!run.active) return;
-  if (!run.paused) {
-    const now = performance.now();
-    const cur = run.queue[run.idx], next = run.queue[run.idx + 1];
-    const rem = run.segStart + lenMs(cur) - now;
-    const out = fadeOutFor(cur), early = next ? earlyFor(cur, next) : 0;
-    if (!run.fadingOut && out > 0 && rem <= out) {
-      run.fadingOut = true;
-      if (run.ch) fade(run.ch, 0, Math.max(0, rem));
-    }
-    if (early > 0 && rem <= early && run.earlyIdx !== run.idx + 1) {
-      run.earlyIdx = run.idx + 1;
-      startEarly(run.idx + 1);
-    }
-    if (rem <= 0) {
-      if (run.idx + 1 >= run.queue.length) return finishRun();
-      if (settings.drinkCue && !cur.bite) flashDrink(); // a real song just ended
-      run.segStart += lenMs(cur);
-      if (now - run.segStart > 1000) run.segStart = now; // recover if the tab was asleep
-      const pre = run.pre && run.pre.idx === run.idx + 1 && run.pre.ready ? run.pre.ch : null;
-      run.pre = null;
-      beginSegment(run.idx + 1, pre);
-    }
-  }
-  updateClock();
-}
+const runPaused = () => !!run.tl?.paused && !run.done;
 function updateClock() {
-  const len = lenMs(run.queue[run.idx]);
-  const now = run.paused ? run.pausedAt : performance.now();
-  const elapsed = Math.max(0, Math.min(len, now - run.segStart));
-  if (run.scrubbing) return;
-  $("#clock").textContent = Math.ceil((len - elapsed) / 1000);
-  $("#run-progress").style.width = (elapsed / len * 100).toFixed(2) + "%";
-  $("#run-left").textContent = fmt(run.after[run.idx] + len - elapsed) + " left";
+  const tl = run.tl, p = tl?.plan[run.idx];
+  if (!p || run.scrubbing) return;
+  const T = tlNow(tl), segLen = Math.max(1, p.end - p.segStart);
+  const elapsed = Math.max(0, Math.min(segLen, T - p.segStart));
+  $("#clock").textContent = Math.ceil((segLen - elapsed) / 1000);
+  $("#run-progress").style.width = (elapsed / segLen * 100).toFixed(2) + "%";
+  $("#run-left").textContent = fmt(Math.max(0, tl.total - T)) + " left";
 }
 function renderRun() {
   const r = run.queue[run.idx], next = run.queue.slice(run.idx + 1).find((x) => !x.bite);
@@ -1372,66 +1411,42 @@ function renderRun() {
   $("#run-next").hidden = (settings.hideNext || (!next && r?.bite)) && !run.done;
   $("#run-next").innerHTML = next ? `Next up: <b>${esc(next.name)}</b>, ${esc(next.artists)}` : "Last song";
   $("#run-hide-next").textContent = settings.hideNext ? "Show next" : "Hide next";
-  $("#run-pause").textContent = run.paused ? "Resume" : "Pause";
-  $(".run").classList.toggle("is-paused", run.paused);
+  $("#run-pause").textContent = runPaused() ? "Resume" : "Pause";
+  $(".run").classList.toggle("is-paused", runPaused());
 }
 function togglePause() {
-  if (!run.active || run.done) return;
+  if (!run.active || run.done || !run.tl) return;
   unlockAudio();
-  if (!run.paused) {
-    run.paused = true; run.pausedAt = performance.now();
-    cancelFades();
-    run.pausedChs = channels.filter((c) => c.key);
-    for (const c of run.pausedChs) c.pause();
-  } else {
-    run.segStart += performance.now() - run.pausedAt;
-    run.paused = false;
-    for (const c of run.pausedChs) c.resume();
-    const rem = Math.max(0, run.segStart + lenMs(run.queue[run.idx]) - performance.now());
-    if (run.ch) fade(run.ch, run.fadingOut ? 0 : 1, run.fadingOut ? rem : 300);
-    if (run.pre?.ready) fade(run.pre.ch, 1, 300);
-  }
+  if (run.tl.paused) tlResume(run.tl); else tlPause(run.tl);
   renderRun(); updateClock();
 }
+// Next / Previous: jump to the start of that item's segment (skipping empty ones).
 function jump(delta) {
-  if (!run.active || run.done) return;
+  if (!run.active || run.done || !run.tl) return;
   unlockAudio();
-  const n = run.idx + delta;
+  const plan = run.tl.plan, empty = (k) => plan[k] && plan[k].end <= plan[k].segStart;
+  let n = run.idx + delta;
+  while (empty(n)) n += delta;
   if (n < 0) return;
-  if (n >= run.queue.length) return finishRun();
-  run.segStart = performance.now();
-  if (run.paused) run.pausedAt = run.segStart;
-  beginSegment(n);
+  if (n >= plan.length) return tlFinish(run.tl);
+  tlSeek(run.tl, plan[n].segStart);
   updateClock();
 }
-// Jump within the current song: `frac` 0..1 of its time. Undoes an ending that already began.
+// Progress bar: `frac` 0..1 of the current segment.
 function seekRun(frac) {
-  const cur = run.queue[run.idx];
-  if (!run.active || run.done || !cur || cur.bite || !run.ch) return;
-  const len = lenMs(cur), now = run.paused ? run.pausedAt : performance.now();
-  const elapsed = Math.max(0, Math.min(len - 250, frac * len));
-  run.segStart = now - elapsed;
-  run.ch.seek(run.segAudio + elapsed);
-  const next = run.queue[run.idx + 1], rem = len - elapsed;
-  if (run.pre && rem > (next ? earlyFor(cur, next) : 0)) {
-    run.preToken++;
-    if (run.pre.ch !== run.ch) run.pre.ch.stop();
-    run.pre = null;
-  }
-  if (rem > (next ? earlyFor(cur, next) : 0)) run.earlyIdx = -1;
-  if (run.fadingOut && rem > fadeOutFor(cur)) {
-    run.fadingOut = false;
-    if (!run.paused) fade(run.ch, 1, 200);
-  }
+  const tl = run.tl, p = tl?.plan[run.idx];
+  if (!run.active || run.done || !p || p.r.bite) return;
+  tlSeek(tl, p.segStart + Math.min(0.999, Math.max(0, frac)) * (p.end - p.segStart));
   updateClock();
 }
 function bindScrub() {
   const bar = $("#run-scrub");
   const fracAt = (e) => { const b = bar.getBoundingClientRect(); return Math.max(0, Math.min(1, (e.clientX - b.left) / b.width)); };
   const show = (f) => {
-    const len = lenMs(run.queue[run.idx]);
+    const p = run.tl?.plan[run.idx];
+    if (!p) return;
     $("#run-progress").style.width = (f * 100).toFixed(2) + "%";
-    $("#clock").textContent = Math.ceil(((1 - f) * len) / 1000);
+    $("#clock").textContent = Math.ceil(((1 - f) * (p.end - p.segStart)) / 1000);
   };
   bar.addEventListener("pointerdown", (e) => {
     if (!run.active || run.done || run.queue[run.idx]?.bite) return;
@@ -1454,14 +1469,10 @@ function flashDrink() {
   setTimeout(() => d.classList.remove("show"), 1400);
 }
 async function finishRun() {
-  clearInterval(run.timer);
-  run.done = true; run.preToken++;
-  $("#clock").textContent = "0";
-  $("#run-progress").style.width = "100%";
-  $("#run-left").textContent = fmt(0) + " left";
-  if (run.ch) await fade(run.ch, 0, 1500);
+  if (!run.active || run.done) return;
+  run.done = true;
   stopChannels();
-  $(".run").classList.remove("is-bite");
+  $(".run").classList.remove("is-bite", "is-paused");
   $("#clock").textContent = "Done";
   $("#run-progress").style.width = "100%";
   $("#run-left").textContent = "";
@@ -1471,11 +1482,15 @@ async function finishRun() {
   try { await run.wake?.release(); } catch {}
 }
 async function endRun() {
-  clearInterval(run.timer);
-  run.active = false; run.done = false; run.preToken++;
-  cancelFades();
-  if (run.ch) await fade(run.ch, 0, 600);
-  stopChannels();
+  const tl = run.tl;
+  run.active = false;
+  if (tl && !tl.done && !run.done) {
+    tl.hooks = {};
+    tlFadeOut(tl, 600);
+    await sleep(650);
+  }
+  tlStop(tl);
+  run.tl = null; run.done = false;
   try { await run.wake?.release(); } catch {}
   showView("main");
   renderList();
