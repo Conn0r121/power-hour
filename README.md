@@ -84,14 +84,15 @@ Open `http://127.0.0.1:8000/` (not `localhost`).
 - Paste Spotify song or playlist links into **Add songs**. A time after a link sets its start: `https://open.spotify.com/track/… 1:23`.
 - Audio files work too: paste a direct `https://` link to an MP3 (or other audio file; Dropbox share links are converted automatically), or use **add MP3s from this computer** / drag files onto the box. Uploaded files are stored in that browser only (IndexedDB); **Export** saves the list but not the files themselves, so on another computer they're flagged until you add them again.
 - Under each row: a **note** (shown big during the power hour, e.g. "Picked by Sam"), plus **Plays**, **Fade in** and **Fade out** in seconds. Leave a number empty to use the default from Settings.
-- **Volume %** per row, for audio that's quieter or louder than your Spotify songs. Uploaded files go from 0 to 300% (they're boosted with Web Audio), and **Auto** measures the part of the file that plays and sets a matching level as a starting point. Spotify songs and audio links can only go up to the player's maximum: with the master volume at 80%, that's about 125%. Links can't be boosted further because browsers block processing audio from other sites. If a linked file is too quiet, download it and upload it instead. Changes apply live while previewing.
+- **Volume** slider per row, for audio that's quieter or louder than your Spotify songs (click the % to reset to 100%). Uploaded files go from 0 to 300% (they're boosted with Web Audio), and **Auto** measures the part of the file that plays and sets a matching level as a starting point. Spotify songs and audio links can only go up to the player's maximum: with the master volume at 80%, that's about 125%. Links can't be boosted further because browsers block processing audio from other sites. If a linked file is too quiet, download it and upload it instead. Changes apply live while previewing.
 - **Hide what's next** (Settings, or the **Hide next** button during the hour) removes the "Next up" line.
 - **Sound bite** (checkbox per row): for intros, airhorns and clips between songs. Sound bites play to their end unless you set **Plays**, don't get a song number, show no countdown or progress bar, never trigger the "Drink" flash, and "Next up" skips past them to the next real song.
-- During the hour: "3 of 60" counts real songs, the time under it is what's left of the whole hour, and the progress bar fills once per song. "Drink" flashes when a real song ends.
+- During the hour: "3 of 60" counts real songs, the time under it is what's left of the whole hour, and the progress bar fills once per song; drag or click it to jump within the song. "Drink" flashes when a real song ends.
 - Drag the handle to reorder (or focus it and use Alt + arrow keys). While dragging, move toward the top or bottom edge to scroll; the closer to the edge, the faster. The mouse wheel also scrolls mid-drag.
 - **Play** previews from the start time. While it plays, **Pause** / **Resume**, **Mark start here** sets the start to the current spot, and −5s / −1s / +1s / +5s scrub.
-- **Overlap** (Settings, on by default): when an audio file is on either side of a change, the next track starts as the current one begins its fade-out, and fades in over its own fade-in. A fade-out of 0 means a hard cut with no overlap. Spotify → Spotify can't overlap (Spotify plays one stream at a time), so those fade out, then in.
-- **Test fade** plays the end of a song fading (or overlapping) into the next, on the same timeline as the real run: short songs play from their start, and if the next one ends within the test it ends with its own fade-out.
+- **Fade in / Fade out** are only volume: a song ramps up when it starts and down so it's silent exactly when its time is up.
+- **Start early** (per row, default 0) starts that item X seconds before the previous one ends, layered over it, for custom overlaps (an airhorn over a song's last seconds, a crossfade between files). The previous song still gets its full time, and the new one's countdown starts when the previous one ends. Spotify → Spotify can't overlap (Spotify plays one stream per account), so Start early is disabled on a Spotify song that follows another Spotify song. It works whenever an audio file or link is on either side.
+- **Test fade** plays the end of a song going into the next, with fades and start early, on the same timeline as the real run: short songs play from their start, and if the next one ends within the test it ends with its own fade-out.
 - Rows warn if a song is unavailable in your region, if Spotify substituted a different version, or if the start is too late for a full minute.
 - The list saves in the browser automatically, and survives site updates.
 - **Backups** (Settings): **Export list** saves songs and settings; **Export with audio files** also embeds your uploaded files, so it's a full backup you can restore on any computer. **Import list** restores either kind, replacing the current list (it asks first).
@@ -100,7 +101,7 @@ Open `http://127.0.0.1:8000/` (not `localhost`).
 
 ## Known limits
 
-- Two Spotify songs in a row fade out then in rather than overlapping; Spotify plays one stream per account. Overlaps work whenever an audio file is involved.
+- Two Spotify songs in a row can't overlap (Spotify plays one stream per account); use fades between them. Start early works whenever an audio file or link is on either side.
 - Audio links must allow direct playback (no login page or download wrapper). Google Drive share links usually don't work.
 - Spotify-made editorial playlists can't be imported; paste the songs individually or copy them into your own playlist.
 - Development Mode caps each Spotify app at 5 users.

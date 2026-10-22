@@ -165,6 +165,9 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
 }
 .opt { display: inline-flex; align-items: center; gap: .3rem; color: var(--muted); font-size: .85rem; white-space: nowrap; }
 .ts.optin { width: 3.2rem; }
+.opt.off { opacity: .5; }
+.opt.vol input[type=range] { width: 7rem; accent-color: var(--accent); }
+.opt.vol .vol-val { min-width: 3.2em; text-align: left; color: var(--ink); font-variant-numeric: tabular-nums; text-decoration: none; }
 .ts.optin::placeholder, .note-in::placeholder { color: var(--muted); font-weight: 400; opacity: .8; }
 .acts { grid-area: acts; display: flex; align-items: center; gap: .35rem; justify-content: flex-end; }
 
@@ -207,12 +210,19 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
 .track img { width: 5rem; height: 5rem; border-radius: .6rem; object-fit: cover; flex: none; background: var(--surface-2); }
 .track .t { font-size: clamp(1.3rem, 3vw, 1.9rem); font-weight: 700; line-height: 1.15; }
 .track .a { color: var(--muted); font-size: 1.05rem; }
-.progress { width: min(40rem, 100%); height: .5rem; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
-.run.is-bite .clock, .run.is-bite .progress { display: none; }
+.scrub { width: min(40rem, 100%); padding: .75rem 0; cursor: pointer; touch-action: none; }
+.progress { width: 100%; height: .5rem; background: var(--surface-2); border-radius: 999px; transition: height .15s; }
+.scrub:hover .progress, .scrub.dragging .progress { height: .75rem; }
+.run.is-bite .clock, .run.is-bite .scrub { display: none; }
 .run-left { color: var(--muted); font-weight: 700; font-variant-numeric: tabular-nums; margin-top: .25rem; }
 .opt input[type=checkbox] { accent-color: var(--accent); width: 1.05rem; height: 1.05rem; margin: 0; }
 .flag.bite { color: var(--accent-text); font-weight: 600; }
-.progress div { height: 100%; width: 0; background: var(--accent); }
+.progress div { height: 100%; width: 0; background: var(--accent); border-radius: 999px; position: relative; }
+.progress div::after {
+  content: ""; position: absolute; right: -.5rem; top: 50%; width: 1rem; height: 1rem; border-radius: 50%;
+  background: var(--accent); border: 2px solid var(--bg); transform: translateY(-50%); opacity: 0; transition: opacity .15s;
+}
+.scrub:hover .progress div::after, .scrub.dragging .progress div::after { opacity: 1; }
 .next { color: var(--muted); }
 .next b { color: var(--ink); font-weight: 600; }
 .run-controls { display: flex; justify-content: center; gap: .75rem; flex-wrap: wrap; }
@@ -306,7 +316,6 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
         <label class="field"><span>Default fade out: <b id="fadeout-val"></b></span><input type="range" id="set-fadeout" min="0" max="10" step="0.5"></label>
         <label class="field"><span>Volume: <b id="vol-val"></b></span><input type="range" id="set-vol" min="0" max="100" step="1"></label>
         <label class="check"><input type="checkbox" id="set-drink"> Flash “Drink” after each song (not after sound bites)</label>
-        <label class="check" title="Two Spotify songs can’t overlap (Spotify plays one at a time), so they fade out, then in."><input type="checkbox" id="set-overlap"> Overlap songs during the fade when an audio file is involved</label>
         <label class="check"><input type="checkbox" id="set-hidenext"> Hide what’s next during the power hour</label>
       </div>
       <div class="row-tools">
@@ -352,7 +361,7 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
     <div class="clock" id="clock" aria-live="off">60</div>
     <div class="track"><img id="run-art" alt=""><div><div class="t" id="run-title"></div><div class="a" id="run-artist"></div></div></div>
     <div class="run-note" id="run-note" hidden></div>
-    <div class="progress" aria-hidden="true"><div id="run-progress"></div></div>
+    <div class="scrub" id="run-scrub" title="Drag to move within this song"><div class="progress"><div id="run-progress"></div></div></div>
     <div class="next" id="run-next"></div>
   </div>
   <div class="run-controls" id="run-controls">
@@ -442,6 +451,8 @@ function normalizeRow(r) {
     if (v >= 0 && v <= 10) row[k] = Math.round(v * 2) / 2; else delete row[k];
   }
   if (row.bite === true) row.bite = true; else delete row.bite;
+  const early = row.startEarlySec == null || row.startEarlySec === "" ? NaN : Math.round(+row.startEarlySec * 2) / 2;
+  if (early > 0 && early <= 60) row.startEarlySec = early; else delete row.startEarlySec;
   const vol = row.volPct == null || row.volPct === "" ? NaN : Math.round(+row.volPct);
   if (vol >= 0 && vol <= 300 && vol !== 100) row.volPct = vol; else delete row.volPct;
   row.note = String(row.note ?? "").trim().slice(0, 200);
@@ -463,16 +474,18 @@ function cleanSettings(s) {
   if (typeof s.hideNext === "boolean") out.hideNext = s.hideNext;
   if (+s.volume >= 0 && +s.volume <= 1) out.volume = +s.volume;
   if (typeof s.drinkCue === "boolean") out.drinkCue = s.drinkCue;
-  if (typeof s.overlap === "boolean") out.overlap = s.overlap;
   return out;
 }
 let list = (store.get("list", []) || []).map(normalizeRow).filter(Boolean);
-let settings = Object.assign({ segSec: 60, fadeInSec: 1, fadeOutSec: 2, volume: 0.8, drinkCue: true, overlap: true, hideNext: false }, cleanSettings(store.get("settings", {})));
+let settings = Object.assign({ segSec: 60, fadeInSec: 1, fadeOutSec: 2, volume: 0.8, drinkCue: true, hideNext: false }, cleanSettings(store.get("settings", {})));
 const saveList = () => store.set("list", list);
 const saveSettings = () => store.set("settings", settings);
 // Per-song length (row.lenSec) overrides the default from Settings.
 // Sound bites (row.bite) play to their end unless they set their own length.
-const lenMs = (r) => r.lenSec ? r.lenSec * 1000 : r.bite ? Math.max(1000, r.durationMs - r.startMs) : settings.segSec * 1000;
+// A sound bite that starts early ends that much sooner, so by default it still ends with its audio.
+const lenMs = (r) => r.lenSec ? r.lenSec * 1000
+  : r.bite ? Math.max(1000, r.durationMs - r.startMs - (r.startEarlySec || 0) * 1000)
+  : settings.segSec * 1000;
 // Per-song fades (row.fadeInSec / row.fadeOutSec) override the defaults from Settings.
 const fadeInFor = (r) => (r.fadeInSec ?? settings.fadeInSec) * 1000;
 const fadeOutFor = (r) => Math.min((r.fadeOutSec ?? settings.fadeOutSec) * 1000, lenMs(r));
@@ -843,7 +856,6 @@ async function startOn(r, ms, { keep = null, level = 1 } = {}) {
 }
 // play() rejects with AbortError when we pause or switch before it starts; that isn’t an error.
 const interrupted = (e) => e?.name === "AbortError";
-// Overlap starts when `a` begins its fade-out; `b` fades in over its own fade-in.
 // Rough loudness match for uploaded files: RMS of the part that plays, aimed at the
 // loudness of a typical song. A starting point; fine-tune by ear.
 async function autoLevel(r) {
@@ -868,11 +880,13 @@ async function autoLevel(r) {
   if (pct === 100) delete r.volPct; else r.volPct = pct;
   saveList();
   const inp = $(`.row[data-key="${r.key}"] [data-field="volPct"]`);
-  if (inp) inp.value = r.volPct ?? "";
+  if (inp) { inp.value = r.volPct ?? 100; inp.closest(".vol").querySelector(".vol-val").textContent = (r.volPct ?? 100) + "%"; }
   for (const c of channels) if (c.key === r.key) { c.mul = rowGain(r); c.apply(); }
   toast(`${r.name}: volume set to ${pct}%${pct > 100 ? " (it was quieter than typical)" : pct < 100 ? " (it was louder than typical)" : ""}.`);
 }
-const canOverlap = (a, b) => settings.overlap && fadeOutFor(a) > 0 && (isAudio(a) || isAudio(b));
+// How early `b` starts over the end of `a`. Spotify → Spotify can’t overlap: one stream per account.
+const bothSpotify = (a, b) => !isAudio(a) && !isAudio(b);
+const earlyFor = (a, b) => (bothSpotify(a, b) ? 0 : Math.min((b.startEarlySec || 0) * 1000, lenMs(a)));
 
 const livePos = () => (activeCh ? activeCh.pos() : 0);
 function isOnRow(r) {
@@ -1030,10 +1044,30 @@ const FIELDS = {
   fadeInSec: [0, 10, 0.5, "a fade from 0 to 10 seconds", () => settings.fadeInSec],
   fadeOutSec: [0, 10, 0.5, "a fade from 0 to 10 seconds", () => settings.fadeOutSec],
   volPct: [0, 300, 5, "a volume from 0 to 300%", () => 100],
+  startEarlySec: [0, 60, 0.5, "0 to 60 seconds", () => 0],
 };
-function optField(r, field, label, title, unit = "s") {
-  return `<label class="opt" title="${title} Leave empty to use the default.">${label}
-    <input class="ts optin" data-field="${field}" value="${r[field] ?? ""}" placeholder="${FIELDS[field][4](r)}" inputmode="decimal" aria-label="${label} for ${esc(r.name)}, ${unit === "%" ? "percent" : "seconds"}">${unit}</label>`;
+function optField(r, field, label, title, disabled = false) {
+  return `<label class="opt${disabled ? " off" : ""}" title="${title}${disabled ? "" : " Leave empty to use the default."}">${label}
+    <input class="ts optin" data-field="${field}" value="${disabled ? "" : r[field] ?? ""}" placeholder="${FIELDS[field][4](r)}" inputmode="decimal"${disabled ? " disabled" : ""} aria-label="${label} for ${esc(r.name)}, seconds">s</label>`;
+}
+// Uploaded files can be boosted to 300%; Spotify and links top out at the player's maximum.
+function volSlider(r) {
+  const max = r.src === "file" ? 300 : 150, v = Math.min(max, r.volPct ?? 100);
+  const title = r.src === "file" ? "Volume for this file, up to 300% to boost quiet files."
+    : "Volume for this song. Spotify songs and links can only go up to the player’s maximum, so above about 125% has no effect.";
+  return `<label class="opt vol" title="${title}">Volume
+    <input type="range" data-field="volPct" min="0" max="${max}" step="5" value="${v}" aria-label="Volume for ${esc(r.name)}, percent">
+    <button class="linkish vol-val" type="button" data-act="vol-reset" title="Reset to 100%">${v}%</button></label>`;
+}
+// The playable item before row i (unavailable rows are skipped in the run too).
+const prevPlayable = (i) => list.slice(0, i).reverse().find((x) => !x.unavailable);
+function earlyField(r, i) {
+  const prev = prevPlayable(i);
+  const why = !prev ? "The first item has nothing to start over."
+    : bothSpotify(prev, r) ? "Spotify can’t play two songs at once, so a Spotify song can’t start early over another Spotify song."
+    : "";
+  return optField(r, "startEarlySec", "Start early",
+    why || "Start this many seconds before the previous item ends, layered over it. Its own countdown still starts when the previous one ends.", !!why);
 }
 function rowHtml(r, i) {
   const playing = preview.key === r.key;
@@ -1054,7 +1088,7 @@ function rowHtml(r, i) {
     </div>
     <div class="acts">
       <button class="btn small${playing ? " primary" : ""}" type="button" data-act="preview">${playing ? "Stop" : "Play"}</button>
-      ${i < list.length - 1 ? '<button class="btn small ghost" type="button" data-act="test" title="Hear the end of this song fade into the next one">Test fade</button>' : ""}
+      ${i < list.length - 1 ? '<button class="btn small ghost" type="button" data-act="test" title="Hear the end of this song going into the next one, with fades and start early">Test fade</button>' : ""}
       <button class="icon" type="button" data-act="remove" aria-label="Remove ${esc(r.name)}">×</button>
     </div>
     <div class="opts">
@@ -1062,10 +1096,9 @@ function rowHtml(r, i) {
       ${optField(r, "lenSec", "Plays", "How long this song plays.")}
       ${optField(r, "fadeInSec", "Fade in", "How long this song takes to fade in.")}
       <label class="opt" title="Sound bites don’t count as songs: no countdown, no Drink flash, and Next up skips them."><input type="checkbox" data-field="bite"${r.bite ? " checked" : ""}> Sound bite</label>
-      ${optField(r, "fadeOutSec", "Fade out", "How long this song takes to fade out. With overlap on, the next song starts when this fade starts.")}
-      ${optField(r, "volPct", "Volume", r.src === "file"
-        ? "Volume for this file, up to 300% to boost quiet files."
-        : "Volume for this song. Spotify songs and links can only go up to the player’s maximum, so above about 125% has no effect.", "%")}
+      ${optField(r, "fadeOutSec", "Fade out", "How long this song takes to fade out, ending when its time is up.")}
+      ${earlyField(r, i)}
+      ${volSlider(r)}
       ${r.src === "file" ? '<button class="linkish" type="button" data-act="autolevel" title="Measure this file and set its volume to roughly match a typical song">Auto</button>' : ""}
     </div>
   </li>`;
@@ -1171,12 +1204,12 @@ async function testFade(i) {
   // What the run would actually play: its length, cut short if the audio runs out first.
   const segA = Math.min(lenMs(a), a.durationMs - a.startMs), segB = Math.min(lenMs(b), b.durationMs - b.startMs);
   const outA = Math.min(fadeOutFor(a), segA), inB = fadeInFor(b);
-  const lap = canOverlap(a, b);
-  const lead = Math.min(segA, Math.max(outA + 4000, 6000));   // how much of a's ending to hear
-  const tailB = Math.min(segB, Math.max(inB + 4000, 6000));   // how much of b to hear
-  const bEnds = tailB === segB;                               // b's segment ends inside the test
+  const early = Math.min(earlyFor(a, b), segA);
+  const lead = Math.min(segA, Math.max(outA + 4000, early + 4000, 6000)); // how much of a's ending to hear
+  const tailB = Math.min(segB, Math.max(inB + 4000, 6000));                // how much of b after a ends
+  const bEnds = tailB === segB;                                            // b's time ends inside the test
   const outB = bEnds ? Math.min(fadeOutFor(b), segB) : 800;
-  showNowBar(a, "test", `${lap ? "Overlap" : "Fade"} test into ${b.name}`);
+  showNowBar(a, "test", `Transition test into ${b.name}${early ? ` (starts ${early / 1000}s early)` : ""}`);
   const alive = () => id === testId;
   try {
     cancelFades();
@@ -1185,22 +1218,20 @@ async function testFade(i) {
     if (fromStart) fade(chA, 1, fadeInFor(a));
     const t0 = performance.now();
     const at = (ms) => sleep(Math.max(0, t0 + ms - performance.now()));
-    await at(lead - outA); if (!alive()) return;            // a starts fading out
-    let chB;
-    if (lap) {
-      fade(chA, 0, outA);
-      chB = await startOn(b, b.startMs, { keep: chA, level: 0 }); if (!alive()) return;
-      fade(chB, 1, inB);
-      showNowBar(b, "test", "Overlap test");
-      await at(lead); if (!alive()) return;                  // a's segment ends
-      chA.stop();
-    } else {
-      await fade(chA, 0, outA); if (!alive()) return;
-      await at(lead); if (!alive()) return;
-      showNowBar(b, "test", "Fade test");
-      chB = await startOn(b, b.startMs, { level: 0 }); if (!alive()) return;
-      fade(chB, 1, inB);
+    // Timeline, relative to now: a fades out to end at `lead`; b starts at lead - early.
+    const events = [[lead - outA, "fadeA"], [lead - early, "startB"]].sort((x, y) => x[0] - y[0]);
+    let chB = null;
+    for (const [when, what] of events) {
+      await at(when); if (!alive()) return;
+      if (what === "fadeA") fade(chA, 0, outA);
+      else {
+        chB = await startOn(b, b.startMs, { keep: chA, level: 0 }); if (!alive()) return;
+        fade(chB, 1, inB);
+        showNowBar(b, "test", "Transition test");
+      }
     }
+    await at(lead); if (!alive()) return;                    // a's time is up
+    if (chA !== chB) chA.stop();
     await at(lead + tailB - outB); if (!alive()) return;     // b fades out (its own fade if it ends here)
     await fade(chB, 0, outB); if (!alive()) return;
     stopChannels();
@@ -1263,10 +1294,12 @@ async function beginSegment(i, preCh = null) {
     // Already playing from the overlap; retire the previous song's channel.
     if (run.ch && run.ch !== preCh) run.ch.stop();
     run.ch = preCh; activeCh = preCh;
+    run.segAudio = r.startMs + (i > 0 ? earlyFor(run.queue[i - 1], r) : 0);
     return;
   }
-  run.preToken++; run.pre = null;
+  run.preToken++; run.pre = null; run.earlyIdx = -1;
   cancelFades();
+  run.segAudio = r.startMs;
   const starting = startOn(r, r.startMs, { level: 0 });
   run.ch = activeCh;
   try { await starting; }
@@ -1297,11 +1330,14 @@ function tick() {
     const now = performance.now();
     const cur = run.queue[run.idx], next = run.queue[run.idx + 1];
     const rem = run.segStart + lenMs(cur) - now;
-    const out = fadeOutFor(cur);
+    const out = fadeOutFor(cur), early = next ? earlyFor(cur, next) : 0;
     if (!run.fadingOut && out > 0 && rem <= out) {
       run.fadingOut = true;
       if (run.ch) fade(run.ch, 0, Math.max(0, rem));
-      if (next && canOverlap(cur, next)) startEarly(run.idx + 1);
+    }
+    if (early > 0 && rem <= early && run.earlyIdx !== run.idx + 1) {
+      run.earlyIdx = run.idx + 1;
+      startEarly(run.idx + 1);
     }
     if (rem <= 0) {
       if (run.idx + 1 >= run.queue.length) return finishRun();
@@ -1319,6 +1355,7 @@ function updateClock() {
   const len = lenMs(run.queue[run.idx]);
   const now = run.paused ? run.pausedAt : performance.now();
   const elapsed = Math.max(0, Math.min(len, now - run.segStart));
+  if (run.scrubbing) return;
   $("#clock").textContent = Math.ceil((len - elapsed) / 1000);
   $("#run-progress").style.width = (elapsed / len * 100).toFixed(2) + "%";
   $("#run-left").textContent = fmt(run.after[run.idx] + len - elapsed) + " left";
@@ -1351,10 +1388,8 @@ function togglePause() {
     run.paused = false;
     for (const c of run.pausedChs) c.resume();
     const rem = Math.max(0, run.segStart + lenMs(run.queue[run.idx]) - performance.now());
-    if (run.fadingOut) {
-      if (run.ch) fade(run.ch, 0, rem);
-      if (run.pre?.ready) fade(run.pre.ch, 1, Math.max(300, Math.min(rem, fadeInFor(run.queue[run.pre.idx]))));
-    } else if (run.ch) fade(run.ch, 1, 300);
+    if (run.ch) fade(run.ch, run.fadingOut ? 0 : 1, run.fadingOut ? rem : 300);
+    if (run.pre?.ready) fade(run.pre.ch, 1, 300);
   }
   renderRun(); updateClock();
 }
@@ -1368,6 +1403,50 @@ function jump(delta) {
   if (run.paused) run.pausedAt = run.segStart;
   beginSegment(n);
   updateClock();
+}
+// Jump within the current song: `frac` 0..1 of its time. Undoes an ending that already began.
+function seekRun(frac) {
+  const cur = run.queue[run.idx];
+  if (!run.active || run.done || !cur || cur.bite || !run.ch) return;
+  const len = lenMs(cur), now = run.paused ? run.pausedAt : performance.now();
+  const elapsed = Math.max(0, Math.min(len - 250, frac * len));
+  run.segStart = now - elapsed;
+  run.ch.seek(run.segAudio + elapsed);
+  const next = run.queue[run.idx + 1], rem = len - elapsed;
+  if (run.pre && rem > (next ? earlyFor(cur, next) : 0)) {
+    run.preToken++;
+    if (run.pre.ch !== run.ch) run.pre.ch.stop();
+    run.pre = null;
+  }
+  if (rem > (next ? earlyFor(cur, next) : 0)) run.earlyIdx = -1;
+  if (run.fadingOut && rem > fadeOutFor(cur)) {
+    run.fadingOut = false;
+    if (!run.paused) fade(run.ch, 1, 200);
+  }
+  updateClock();
+}
+function bindScrub() {
+  const bar = $("#run-scrub");
+  const fracAt = (e) => { const b = bar.getBoundingClientRect(); return Math.max(0, Math.min(1, (e.clientX - b.left) / b.width)); };
+  const show = (f) => {
+    const len = lenMs(run.queue[run.idx]);
+    $("#run-progress").style.width = (f * 100).toFixed(2) + "%";
+    $("#clock").textContent = Math.ceil(((1 - f) * len) / 1000);
+  };
+  bar.addEventListener("pointerdown", (e) => {
+    if (!run.active || run.done || run.queue[run.idx]?.bite) return;
+    run.scrubbing = true; bar.classList.add("dragging");
+    bar.setPointerCapture(e.pointerId);
+    show(fracAt(e));
+  });
+  bar.addEventListener("pointermove", (e) => { if (run.scrubbing) show(fracAt(e)); });
+  const end = (e, commit) => {
+    if (!run.scrubbing) return;
+    run.scrubbing = false; bar.classList.remove("dragging");
+    if (commit) seekRun(fracAt(e)); else updateClock();
+  };
+  bar.addEventListener("pointerup", (e) => end(e, true));
+  bar.addEventListener("pointercancel", (e) => end(e, false));
 }
 function flashDrink() {
   const d = $("#drink");
@@ -1406,10 +1485,11 @@ async function endRun() {
    Exports use the same row format as the saved list. To keep every older export
    importable: only ADD fields in future versions (never rename or remove one),
    bump EXPORT_VERSION, and teach normalizeRow()/cleanSettings() to upgrade old data. */
-const EXPORT_VERSION = 5; // 1: Spotify songs only. 2: adds audio links/files, lenSec, embedded files.
+const EXPORT_VERSION = 6; // 1: Spotify songs only. 2: adds audio links/files, lenSec, embedded files.
                           // 3: adds per-song note, fadeInSec, fadeOutSec; settings fadeSec → fadeInSec/fadeOutSec, hideNext.
                           // 4: adds per-row bite (sound bite).
                           // 5: adds per-row volPct.
+                          // 6: adds per-row startEarlySec; settings.overlap removed (fades no longer cause overlap).
 function blobToDataUrl(blob) {
   return new Promise((res, rej) => {
     const fr = new FileReader();
@@ -1522,13 +1602,24 @@ function bindMain() {
     else if (act === "preview") preview.key === r.key ? stopAll() : startPreview(r);
     else if (act === "test") testFade(list.indexOf(r));
     else if (act === "autolevel") autoLevel(r);
+    else if (act === "vol-reset") { const inp = b.closest(".vol").querySelector("input"); inp.value = 100; setVol(r, 100, inp); saveList(); }
     else if (act === "remove") {
       if (preview.key === r.key) stopAll();
       list.splice(list.indexOf(r), 1);
       saveList(); renderList(); pruneFiles();
     }
   });
+  const setVol = (r, v, input) => {
+    if (v === 100) delete r.volPct; else r.volPct = v;
+    const lbl = input.closest(".vol").querySelector(".vol-val");
+    lbl.textContent = v + "%";
+    for (const c of channels) if (c.key === r.key) { c.mul = rowGain(r); c.apply(); }
+  };
+  L.addEventListener("input", (e) => {
+    if (e.target.matches('input[type=range][data-field="volPct"]')) setVol(findRow(e.target), +e.target.value, e.target);
+  });
   L.addEventListener("change", (e) => {
+    if (e.target.matches('input[type=range][data-field="volPct"]')) { setVol(findRow(e.target), +e.target.value, e.target); saveList(); return; }
     if (e.target.matches("[data-field]")) {
       const r = findRow(e.target), field = e.target.dataset.field, v = e.target.value.trim();
       e.target.removeAttribute("aria-invalid");
@@ -1612,6 +1703,7 @@ function bindMain() {
   $("#run-prev").onclick = () => jump(-1);
   $("#run-end").onclick = () => { if (run.done || confirm("End the power hour?")) endRun(); };
   $("#run-back").onclick = endRun;
+  bindScrub();
   document.addEventListener("keydown", (e) => {
     if (!run.active || run.done || e.target.matches("input, textarea")) return;
     if (e.code === "Space") { e.preventDefault(); togglePause(); }
@@ -1621,7 +1713,7 @@ function bindMain() {
 
   // Settings
   const seg = $("#set-seg"), fin = $("#set-fadein"), fout = $("#set-fadeout"), vol = $("#set-vol");
-  const drink = $("#set-drink"), overlap = $("#set-overlap"), hideNext = $("#set-hidenext");
+  const drink = $("#set-drink"), hideNext = $("#set-hidenext");
   const secs = (v) => (v ? v + "s" : "off");
   const showVals = () => {
     $("#fadein-val").textContent = secs(settings.fadeInSec);
@@ -1631,7 +1723,7 @@ function bindMain() {
   syncSettingsUI = () => {
     seg.value = settings.segSec; fin.value = settings.fadeInSec; fout.value = settings.fadeOutSec;
     vol.value = Math.round(settings.volume * 100);
-    drink.checked = settings.drinkCue; overlap.checked = settings.overlap; hideNext.checked = settings.hideNext;
+    drink.checked = settings.drinkCue; hideNext.checked = settings.hideNext;
     showVals(); applyVolume();
   };
   syncSettingsUI();
@@ -1641,7 +1733,6 @@ function bindMain() {
   fin.onchange = fout.onchange = () => renderList(); // update row placeholders
   vol.oninput = () => { settings.volume = +vol.value / 100; saveSettings(); showVals(); applyVolume(); };
   drink.onchange = () => { settings.drinkCue = drink.checked; saveSettings(); };
-  overlap.onchange = () => { settings.overlap = overlap.checked; saveSettings(); };
   hideNext.onchange = () => { settings.hideNext = hideNext.checked; saveSettings(); };
   $("#run-hide-next").onclick = () => {
     settings.hideNext = !settings.hideNext; hideNext.checked = settings.hideNext;
