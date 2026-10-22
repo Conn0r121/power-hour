@@ -83,10 +83,11 @@ Open `http://127.0.0.1:8000/` (not `localhost`).
 
 - Paste Spotify song or playlist links into **Add songs**. A time after a link sets its start: `https://open.spotify.com/track/… 1:23`.
 - Audio files work too: paste a direct `https://` link to an MP3 (or other audio file; Dropbox share links are converted automatically), or use **add MP3s from this computer** / drag files onto the box. Uploaded files are stored in that browser only (IndexedDB); **Export** saves the list but not the files themselves, so on another computer they're flagged until you add them again.
-- Each row's **for __ s** box sets how long that song plays. Leave it empty to use the default from Settings.
+- Under each row: a **note** (shown big during the power hour, e.g. "Picked by Sam"), plus **Plays**, **Fade in** and **Fade out** in seconds. Leave a number empty to use the default from Settings.
+- **Hide what's next** (Settings, or the **Hide next** button during the hour) removes the "Next up" line.
 - Drag the handle to reorder (or focus it and use Alt + arrow keys).
 - **Play** previews from the start time. While it plays, **Mark start here** sets the start to the current spot; −5s / −1s / +1s / +5s scrub.
-- **Overlap** (Settings, on by default): when an audio file is on either side of a change, the next track starts during the fade so the two crossfade. Spotify → Spotify can't overlap (Spotify plays one stream at a time), so those fade out, then in.
+- **Overlap** (Settings, on by default): when an audio file is on either side of a change, the next track starts as the current one begins its fade-out, and fades in over its own fade-in. A fade-out of 0 means a hard cut with no overlap. Spotify → Spotify can't overlap (Spotify plays one stream at a time), so those fade out, then in.
 - **Test fade** plays the end of a song fading (or overlapping) into the next.
 - Rows warn if a song is unavailable in your region, if Spotify substituted a different version, or if the start is too late for a full minute.
 - The list saves in the browser automatically, and survives site updates.
