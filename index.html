@@ -208,6 +208,10 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
 .track .t { font-size: clamp(1.3rem, 3vw, 1.9rem); font-weight: 700; line-height: 1.15; }
 .track .a { color: var(--muted); font-size: 1.05rem; }
 .progress { width: min(40rem, 100%); height: .5rem; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
+.run.is-bite .clock, .run.is-bite .progress { display: none; }
+.run-left { color: var(--muted); font-weight: 700; font-variant-numeric: tabular-nums; margin-top: .25rem; }
+.opt input[type=checkbox] { accent-color: var(--accent); width: 1.05rem; height: 1.05rem; margin: 0; }
+.flag.bite { color: var(--accent-text); font-weight: 600; }
 .progress div { height: 100%; width: 0; background: var(--accent); }
 .next { color: var(--muted); }
 .next b { color: var(--ink); font-weight: 600; }
@@ -301,7 +305,7 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
         <label class="field"><span>Default fade in: <b id="fadein-val"></b></span><input type="range" id="set-fadein" min="0" max="10" step="0.5"></label>
         <label class="field"><span>Default fade out: <b id="fadeout-val"></b></span><input type="range" id="set-fadeout" min="0" max="10" step="0.5"></label>
         <label class="field"><span>Volume: <b id="vol-val"></b></span><input type="range" id="set-vol" min="0" max="100" step="1"></label>
-        <label class="check"><input type="checkbox" id="set-drink"> Flash “Drink” at each change</label>
+        <label class="check"><input type="checkbox" id="set-drink"> Flash “Drink” after each song (not after sound bites)</label>
         <label class="check" title="Two Spotify songs can’t overlap (Spotify plays one at a time), so they fade out, then in."><input type="checkbox" id="set-overlap"> Overlap songs during the fade when an audio file is involved</label>
         <label class="check"><input type="checkbox" id="set-hidenext"> Hide what’s next during the power hour</label>
       </div>
@@ -328,6 +332,7 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
         <button class="btn small" type="button" data-seek="1000" data-preview-only>+1s</button>
         <button class="btn small" type="button" data-seek="5000" data-preview-only>+5s</button>
         <button class="btn small primary" type="button" id="nb-mark" data-preview-only>Mark start here</button>
+        <button class="btn small" type="button" id="nb-pause" data-preview-only>Pause</button>
         <button class="btn small" type="button" id="nb-stop">Stop</button>
       </div>
     </div>
@@ -340,7 +345,7 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
 
 <section data-view="run" class="run" hidden>
   <div class="run-top">
-    <div class="count" id="run-count"></div>
+    <div><div class="count" id="run-count"></div><div class="run-left" id="run-left"></div></div>
     <div class="right"><button class="btn small ghost" type="button" id="run-hide-next"></button><button class="btn" type="button" id="run-end">End</button></div>
   </div>
   <div class="stage">
@@ -436,6 +441,7 @@ function normalizeRow(r) {
     const v = row[k] == null || row[k] === "" ? NaN : +row[k];
     if (v >= 0 && v <= 10) row[k] = Math.round(v * 2) / 2; else delete row[k];
   }
+  if (row.bite === true) row.bite = true; else delete row.bite;
   row.note = String(row.note ?? "").trim().slice(0, 200);
   if (!row.note) delete row.note;
   return row;
@@ -463,7 +469,8 @@ let settings = Object.assign({ segSec: 60, fadeInSec: 1, fadeOutSec: 2, volume: 
 const saveList = () => store.set("list", list);
 const saveSettings = () => store.set("settings", settings);
 // Per-song length (row.lenSec) overrides the default from Settings.
-const lenMs = (r) => (r.lenSec || settings.segSec) * 1000;
+// Sound bites (row.bite) play to their end unless they set their own length.
+const lenMs = (r) => r.lenSec ? r.lenSec * 1000 : r.bite ? Math.max(1000, r.durationMs - r.startMs) : settings.segSec * 1000;
 // Per-song fades (row.fadeInSec / row.fadeOutSec) override the defaults from Settings.
 const fadeInFor = (r) => (r.fadeInSec ?? settings.fadeInSec) * 1000;
 const fadeOutFor = (r) => Math.min((r.fadeOutSec ?? settings.fadeOutSec) * 1000, lenMs(r));
@@ -946,7 +953,7 @@ async function addFromText(text) {
 
 /* ---------- List UI ---------- */
 const GRIP = '<svg viewBox="0 0 14 22" aria-hidden="true"><circle cx="4" cy="4" r="2"/><circle cx="10" cy="4" r="2"/><circle cx="4" cy="11" r="2"/><circle cx="10" cy="11" r="2"/><circle cx="4" cy="18" r="2"/><circle cx="10" cy="18" r="2"/></svg>';
-const preview = { key: null };
+const preview = { key: null, paused: false };
 
 function flagsHtml(r) {
   const left = r.durationMs - r.startMs;
@@ -956,25 +963,26 @@ function flagsHtml(r) {
     : '<span class="flag bad">Not available in your region, will be skipped</span>');
   else if (r.src === "file") flags.push('<span class="flag">Audio file</span>');
   else if (r.src === "url") flags.push('<span class="flag">Audio link</span>');
+  if (r.bite) flags.unshift('<span class="flag bite">Sound bite</span>');
   if (r.relinked) flags.push('<span class="flag">Spotify swapped in a different version for your region</span>');
   if (left < lenMs(r)) flags.push(`<span class="flag bad">Only ${fmt(Math.max(0, left))} left from this start</span>`);
   return flags.join("");
 }
 // Per-song number fields: [min, max, step, what to say when invalid, default]
 const FIELDS = {
-  lenSec: [5, 600, 1, "a length from 5 to 600 seconds", () => settings.segSec],
+  lenSec: [5, 600, 1, "a length from 5 to 600 seconds", (r) => (r.bite ? "all" : settings.segSec)],
   fadeInSec: [0, 10, 0.5, "a fade from 0 to 10 seconds", () => settings.fadeInSec],
   fadeOutSec: [0, 10, 0.5, "a fade from 0 to 10 seconds", () => settings.fadeOutSec],
 };
 function optField(r, field, label, title) {
   return `<label class="opt" title="${title} Leave empty to use the default from Settings.">${label}
-    <input class="ts optin" data-field="${field}" value="${r[field] ?? ""}" placeholder="${FIELDS[field][4]()}" inputmode="decimal" aria-label="${label} for ${esc(r.name)}, seconds">s</label>`;
+    <input class="ts optin" data-field="${field}" value="${r[field] ?? ""}" placeholder="${FIELDS[field][4](r)}" inputmode="decimal" aria-label="${label} for ${esc(r.name)}, seconds">s</label>`;
 }
 function rowHtml(r, i) {
   const playing = preview.key === r.key;
   return `<li class="row${playing ? " is-playing" : ""}" data-key="${r.key}">
     <button class="grip" type="button" aria-label="Move ${esc(r.name)}. Use Alt plus arrow keys." title="Drag to reorder">${GRIP}</button>
-    <span class="num">${i + 1}</span>
+    <span class="num">${r.bite ? "" : list.slice(0, i + 1).filter((x) => !x.bite).length}</span>
     ${r.art ? `<img class="art" src="${esc(r.art)}" alt="" loading="lazy">` : '<span class="art noart" aria-hidden="true">♪</span>'}
     <div class="meta">
       <div class="title" title="${esc(r.name)}">${esc(r.name)}</div>
@@ -996,14 +1004,18 @@ function rowHtml(r, i) {
       <input class="note-in" data-field="note" value="${esc(r.note || "")}" maxlength="200" placeholder="Note shown during the hour, like “Picked by Sam”" aria-label="Note for ${esc(r.name)}">
       ${optField(r, "lenSec", "Plays", "How long this song plays.")}
       ${optField(r, "fadeInSec", "Fade in", "How long this song takes to fade in.")}
+      <label class="opt" title="Sound bites don’t count as songs: no countdown, no Drink flash, and Next up skips them."><input type="checkbox" data-field="bite"${r.bite ? " checked" : ""}> Sound bite</label>
       ${optField(r, "fadeOutSec", "Fade out", "How long this song takes to fade out. With overlap on, the next song starts when this fade starts.")}
     </div>
   </li>`;
 }
 function renderSummary() {
-  const playable = list.filter((r) => !r.unavailable), n = playable.length;
+  const playable = list.filter((r) => !r.unavailable);
+  const n = playable.filter((r) => !r.bite).length, bites = playable.length - n;
   const total = playable.reduce((t, r) => t + lenMs(r), 0);
-  $("#summary").innerHTML = n ? `<b>${n} song${n === 1 ? "" : "s"}</b>, ${fmt(total)} total` : "Add songs to begin";
+  $("#summary").innerHTML = playable.length
+    ? `<b>${n} song${n === 1 ? "" : "s"}</b>${bites ? `, ${bites} sound bite${bites === 1 ? "" : "s"}` : ""}, ${fmt(total)} total`
+    : "Add songs to begin";
 }
 function renderList() {
   $("#list").innerHTML = list.map(rowHtml).join("");
@@ -1052,6 +1064,8 @@ function showNowBar(r, mode, subText) {
   $("#nb-title").textContent = r.name;
   $("#nb-sub").textContent = subText || r.artists;
   for (const b of nb.querySelectorAll("[data-preview-only]")) b.hidden = mode !== "preview";
+  preview.paused = false;
+  $("#nb-pause").textContent = "Pause";
 }
 function hideNowBar() { $("#nowbar").hidden = true; }
 
@@ -1093,29 +1107,41 @@ async function testFade(i) {
   if ((!isAudio(a) || !isAudio(b)) && !deviceId) return toast("The Spotify player isn’t ready yet.");
   preview.key = null; renderList();
   const id = ++testId; testing = true;
-  const fadeMs = fadeOutFor(a), inMs = fadeInFor(b), lead = Math.max(fadeMs + 4000, 6000);
+  // What the run would actually play: its length, cut short if the audio runs out first.
+  const segA = Math.min(lenMs(a), a.durationMs - a.startMs), segB = Math.min(lenMs(b), b.durationMs - b.startMs);
+  const outA = Math.min(fadeOutFor(a), segA), inB = fadeInFor(b);
   const lap = canOverlap(a, b);
+  const lead = Math.min(segA, Math.max(outA + 4000, 6000));   // how much of a's ending to hear
+  const tailB = Math.min(segB, Math.max(inB + 4000, 6000));   // how much of b to hear
+  const bEnds = tailB === segB;                               // b's segment ends inside the test
+  const outB = bEnds ? Math.min(fadeOutFor(b), segB) : 800;
   showNowBar(a, "test", `${lap ? "Overlap" : "Fade"} test into ${b.name}`);
   const alive = () => id === testId;
   try {
     cancelFades();
-    const chA = await startOn(a, Math.max(0, a.startMs + lenMs(a) - lead));
-    await sleep(lead - fadeMs); if (!alive()) return;
+    const fromStart = lead === segA; // a is short: play it from its start, with its fade-in
+    const chA = await startOn(a, a.startMs + segA - lead, { level: fromStart ? 0 : 1 }); if (!alive()) return;
+    if (fromStart) fade(chA, 1, fadeInFor(a));
+    const t0 = performance.now();
+    const at = (ms) => sleep(Math.max(0, t0 + ms - performance.now()));
+    await at(lead - outA); if (!alive()) return;            // a starts fading out
     let chB;
     if (lap) {
-      const outDone = fade(chA, 0, fadeMs);
+      fade(chA, 0, outA);
       chB = await startOn(b, b.startMs, { keep: chA, level: 0 }); if (!alive()) return;
+      fade(chB, 1, inB);
       showNowBar(b, "test", "Overlap test");
-      await Promise.all([fade(chB, 1, inMs), outDone]); if (!alive()) return;
+      await at(lead); if (!alive()) return;                  // a's segment ends
       chA.stop();
     } else {
-      await fade(chA, 0, fadeMs); if (!alive()) return;
+      await fade(chA, 0, outA); if (!alive()) return;
+      await at(lead); if (!alive()) return;
       showNowBar(b, "test", "Fade test");
       chB = await startOn(b, b.startMs, { level: 0 }); if (!alive()) return;
-      await fade(chB, 1, inMs); if (!alive()) return;
+      fade(chB, 1, inB);
     }
-    await sleep(6000); if (!alive()) return;
-    await fade(chB, 0, 800); if (!alive()) return;
+    await at(lead + tailB - outB); if (!alive()) return;     // b fades out (its own fade if it ends here)
+    await fade(chB, 0, outB); if (!alive()) return;
     stopChannels();
     testing = false; hideNowBar();
   } catch (e) {
@@ -1125,7 +1151,7 @@ async function testFade(i) {
 
 /* ---------- Run mode ---------- */
 const run = {
-  active: false, queue: [], starts: [], total: 0, idx: 0, segStart: 0, paused: false, pausedAt: 0,
+  active: false, queue: [], after: [], songNo: [], songs: 0, idx: 0, segStart: 0, paused: false, pausedAt: 0,
   fadingOut: false, timer: null, wake: null, done: false,
   ch: null,        // channel playing the current song
   pre: null,       // { idx, ch, ready } for a next song started early to overlap
@@ -1144,15 +1170,21 @@ async function startRun() {
   await stopAll();
   run.queue = list.filter((r) => !r.unavailable);
   if (!run.queue.length) return;
-  let t = 0;
-  run.starts = run.queue.map((r) => { const s = t; t += lenMs(r); return s; });
-  run.total = t;
+  // after[i]: time left in the hour once item i ends. songNo[i]: which real song item i is.
+  let t = 0, n = 0;
+  run.after = run.queue.map(() => 0);
+  for (let i = run.queue.length - 1; i >= 0; i--) { run.after[i] = t; t += lenMs(run.queue[i]); }
+  run.songNo = run.queue.map((r) => (r.bite ? 0 : ++n));
+  run.songs = n;
   Object.assign(run, { active: true, idx: 0, paused: false, fadingOut: false, done: false, ch: null, pre: null });
   showView("run");
   $("#run-controls").hidden = false; $("#run-done").hidden = true;
   $(".run").classList.remove("is-paused");
   acquireWake();
   renderRun();
+  $(".run").classList.remove("is-bite"); // show the 3-2-1 even if the first item is a sound bite
+  $("#run-progress").style.width = "0%";
+  $("#run-left").textContent = fmt(run.after[0] + lenMs(run.queue[0])) + " left";
   for (let n = 3; n > 0; n--) {
     $("#clock").textContent = n;
     await sleep(1000);
@@ -1166,7 +1198,6 @@ async function beginSegment(i, preCh = null) {
   run.idx = i; run.fadingOut = false;
   const r = run.queue[i];
   renderRun();
-  if (settings.drinkCue && i > 0) flashDrink();
   if (preCh) {
     // Already playing from the overlap; retire the previous song's channel.
     if (run.ch && run.ch !== preCh) run.ch.stop();
@@ -1213,6 +1244,7 @@ function tick() {
     }
     if (rem <= 0) {
       if (run.idx + 1 >= run.queue.length) return finishRun();
+      if (settings.drinkCue && !cur.bite) flashDrink(); // a real song just ended
       run.segStart += lenMs(cur);
       if (now - run.segStart > 1000) run.segStart = now; // recover if the tab was asleep
       const pre = run.pre && run.pre.idx === run.idx + 1 && run.pre.ready ? run.pre.ch : null;
@@ -1227,17 +1259,19 @@ function updateClock() {
   const now = run.paused ? run.pausedAt : performance.now();
   const elapsed = Math.max(0, Math.min(len, now - run.segStart));
   $("#clock").textContent = Math.ceil((len - elapsed) / 1000);
-  $("#run-progress").style.width = ((run.starts[run.idx] + elapsed) / run.total * 100).toFixed(2) + "%";
+  $("#run-progress").style.width = (elapsed / len * 100).toFixed(2) + "%";
+  $("#run-left").textContent = fmt(run.after[run.idx] + len - elapsed) + " left";
 }
 function renderRun() {
-  const r = run.queue[run.idx], next = run.queue[run.idx + 1];
-  $("#run-count").innerHTML = `${run.idx + 1} <small>of ${run.queue.length}</small>`;
+  const r = run.queue[run.idx], next = run.queue.slice(run.idx + 1).find((x) => !x.bite);
+  $("#run-count").innerHTML = r?.bite ? "<small>Sound bite</small>" : `${run.songNo[run.idx]} <small>of ${run.songs}</small>`;
+  $(".run").classList.toggle("is-bite", !!r?.bite);
   $("#run-art").src = r?.art || "";
   $("#run-title").textContent = r?.name || "";
   $("#run-artist").textContent = r?.artists || "";
   $("#run-note").textContent = r?.note || "";
   $("#run-note").hidden = !r?.note;
-  $("#run-next").hidden = settings.hideNext && !run.done;
+  $("#run-next").hidden = (settings.hideNext || (!next && r?.bite)) && !run.done;
   $("#run-next").innerHTML = next ? `Next up: <b>${esc(next.name)}</b>, ${esc(next.artists)}` : "Last song";
   $("#run-hide-next").textContent = settings.hideNext ? "Show next" : "Hide next";
   $("#run-pause").textContent = run.paused ? "Resume" : "Pause";
@@ -1282,12 +1316,17 @@ function flashDrink() {
 async function finishRun() {
   clearInterval(run.timer);
   run.done = true; run.preToken++;
+  $("#clock").textContent = "0";
+  $("#run-progress").style.width = "100%";
+  $("#run-left").textContent = fmt(0) + " left";
   if (run.ch) await fade(run.ch, 0, 1500);
   stopChannels();
+  $(".run").classList.remove("is-bite");
   $("#clock").textContent = "Done";
   $("#run-progress").style.width = "100%";
+  $("#run-left").textContent = "";
   $("#run-next").hidden = false;
-  $("#run-next").textContent = `That’s all ${run.queue.length}. Nicely done.`;
+  $("#run-next").textContent = `That’s all ${run.songs || run.queue.length} song${(run.songs || run.queue.length) === 1 ? "" : "s"}. Nicely done.`;
   $("#run-controls").hidden = true; $("#run-done").hidden = false;
   try { await run.wake?.release(); } catch {}
 }
@@ -1306,8 +1345,9 @@ async function endRun() {
    Exports use the same row format as the saved list. To keep every older export
    importable: only ADD fields in future versions (never rename or remove one),
    bump EXPORT_VERSION, and teach normalizeRow()/cleanSettings() to upgrade old data. */
-const EXPORT_VERSION = 3; // 1: Spotify songs only. 2: adds audio links/files, lenSec, embedded files.
+const EXPORT_VERSION = 4; // 1: Spotify songs only. 2: adds audio links/files, lenSec, embedded files.
                           // 3: adds per-song note, fadeInSec, fadeOutSec; settings fadeSec → fadeInSec/fadeOutSec, hideNext.
+                          // 4: adds per-row bite (sound bite).
 function blobToDataUrl(blob) {
   return new Promise((res, rej) => {
     const fr = new FileReader();
@@ -1429,6 +1469,12 @@ function bindMain() {
     if (e.target.matches("[data-field]")) {
       const r = findRow(e.target), field = e.target.dataset.field, v = e.target.value.trim();
       e.target.removeAttribute("aria-invalid");
+      if (field === "bite") {
+        if (e.target.checked) r.bite = true; else delete r.bite;
+        saveList(); renderList();
+        $(`.row[data-key="${r.key}"] [data-field="bite"]`)?.focus();
+        return;
+      }
       if (field === "note") {
         if (v) r.note = v.slice(0, 200); else delete r.note;
         saveList();
@@ -1471,6 +1517,12 @@ function bindMain() {
   }
 
   $("#nb-stop").onclick = stopAll;
+  $("#nb-pause").onclick = () => {
+    if (!activeCh || !preview.key) return;
+    preview.paused = !preview.paused;
+    if (preview.paused) activeCh.pause(); else activeCh.resume();
+    $("#nb-pause").textContent = preview.paused ? "Resume" : "Pause";
+  };
   for (const b of document.querySelectorAll("[data-seek]")) b.onclick = () => activeCh?.seek(livePos() + +b.dataset.seek);
   $("#nb-mark").onclick = () => { const r = list.find((x) => x.key === preview.key); if (r) markRow(r); };
   setInterval(() => { if (!$("#nowbar").hidden) $("#nb-pos").textContent = fmt(livePos()); }, 250);
