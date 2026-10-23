@@ -1089,7 +1089,7 @@ function rowHtml(r, i) {
     </div>
     <div class="acts">
       <button class="btn small${playing ? " primary" : ""}" type="button" data-act="preview">${playing ? "Stop" : "Play"}</button>
-      ${i < list.length - 1 ? '<button class="btn small ghost" type="button" data-act="test" title="Hear the end of this song going into the next one, with fades and start early">Test fade</button>' : ""}
+      ${!r.unavailable && list.slice(i + 1).some((x) => !x.unavailable) ? '<button class="btn small ghost" type="button" data-act="test" title="Hear the last 10 seconds of this into the next song, with every sound bite, fade and start early in between, exactly as in the power hour">Test transition</button>' : ""}
       <button class="icon" type="button" data-act="remove" aria-label="Remove ${esc(r.name)}">×</button>
     </div>
     <div class="opts">
@@ -1321,27 +1321,40 @@ function tlFadeOut(tl, ms) {
 /* ---------- Transition test ---------- */
 let testTl = null, testing = false;
 function cancelTest() { if (testTl) { const t = testTl; testTl = null; t.hooks = {}; tlStop(t); } testing = false; }
-async function testFade(i) {
+// The real song (not a sound bite) that comes after playable item k, or the next item if none.
+function nextSongAfter(queue, k) {
+  for (let j = k + 1; j < queue.length; j++) if (!queue[j].bite) return j;
+  return k + 1 < queue.length ? k + 1 : -1;
+}
+// Play the end of row `r` into the next real song using the power hour's own timeline, so every
+// sound bite, start early, fade and volume in between sounds exactly as it will on the night.
+function testTransition(r) {
   unlockAudio();
-  const a = list[i], b = list[i + 1];
-  if ((!isAudio(a) || !isAudio(b)) && !deviceId) return toast("The Spotify player isn’t ready yet.");
+  const queue = list.filter((x) => !x.unavailable), k = queue.indexOf(r);
+  const j = k < 0 ? -1 : nextSongAfter(queue, k);
+  if (j < 0) return toast("There’s nothing after this to transition into.");
+  if (queue.slice(k, j + 1).some((x) => !isAudio(x)) && !deviceId) return toast("The Spotify player isn’t ready yet.");
   preview.key = null; renderList();
   cancelTest(); stopChannels();
-  const tl = makeTimeline([a, b], {
-    onSegment(idx) { showNowBar(tl.plan[idx].r, "test", idx === 0 ? `Transition test into ${b.name}` : "Transition test"); },
+  const tl = makeTimeline(queue, {
+    onSegment(idx) {
+      const item = tl.plan[idx].r;
+      showNowBar(item, "test", idx <= k ? `Transition test into ${queue[j].name}` : item.bite ? "Transition test (sound bite)" : "Transition test");
+    },
     onTick() { // the bar's clock follows whichever item started most recently
       const ks = [...tl.live.keys()];
       if (ks.length) activeCh = tl.live.get(Math.max(...ks)).ch;
     },
     onDone() { if (testTl === tl) { testTl = null; testing = false; hideNowBar(); } },
   });
-  const [pa, pb] = tl.plan;
-  const early = pa.end - pb.start;
-  // Hear a's ending (enough to cover its fade-out and b's early start), then a few seconds of b.
-  const startT = Math.max(0, pa.end - Math.max(Math.max(pa.fadeOut, early) + 4000, 6000));
-  const stopT = Math.min(pb.end, pa.end + Math.max(pb.fadeIn - early, 0) + 5000);
+  const from = tl.plan[k], to = tl.plan[j];
+  // Start 10 s before this item ends, or earlier if something in the transition starts before that.
+  const earliest = Math.min(...tl.plan.slice(k + 1, j + 1).map((x) => x.start));
+  const startT = Math.max(from.start, Math.min(from.end - 10000, earliest));
+  // Stop a few seconds into the next song (after its fade-in), with a short fade.
+  const stopT = Math.min(to.end, to.segStart + Math.max(5000, to.fadeIn + 3000));
   tl.stopAt = stopT;
-  if (stopT < pb.end) tl.cut = { at: stopT - 800, ms: 800 };
+  if (stopT < to.end) tl.cut = { at: stopT - 800, ms: 800 };
   testTl = tl; testing = true;
   tlStart(tl, startT);
 }
@@ -1615,7 +1628,7 @@ function bindMain() {
     const act = b.dataset.act;
     if (act === "nudge") setStart(r, r.startMs + +b.dataset.d);
     else if (act === "preview") preview.key === r.key ? stopAll() : startPreview(r);
-    else if (act === "test") testFade(list.indexOf(r));
+    else if (act === "test") testTransition(r);
     else if (act === "autolevel") autoLevel(r);
     else if (act === "vol-reset") { const inp = b.closest(".vol").querySelector("input"); inp.value = 100; setVol(r, 100, inp); saveList(); }
     else if (act === "remove") {
