@@ -804,11 +804,32 @@ function makeAudioChannel(pool) {
     stop() { el.pause(); this.key = null; },
   };
 }
+// Spotify takes a moment to switch tracks after a play request, and the old track keeps
+// sounding until it does. Hold the volume at 0 until Spotify reports the new track playing,
+// or the old track's tail would come back up with the new track's fade-in.
+const onTrack = (r) => {
+  const t = lastState?.track_window?.current_track;
+  return !!t && !lastState.paused && (t.uri === r.playUri || t.id === r.id || t.linked_from?.uri === r.playUri || t.linked_from?.id === r.id);
+};
 const spotifyCh = {
   level: 1, fadeId: 0, key: null,
-  mul: 1,
-  apply() { player?.setVolume(clamp01(this.level * settings.volume * this.mul)).catch(() => {}); },
-  async play(r, ms) { this.key = r.key; this.mul = rowGain(r); this.apply(); await playAt(r.playUri, ms); },
+  mul: 1, seq: 0, switching: 0, // `switching` = seq of the request still waiting to start (0 = none)
+  apply() { player?.setVolume(this.switching ? 0 : clamp01(this.level * settings.volume * this.mul)).catch(() => {}); },
+  async play(r, ms) {
+    this.key = r.key; this.mul = rowGain(r);
+    const token = this.switching = ++this.seq, asked = performance.now();
+    this.apply();
+    try {
+      await playAt(r.playUri, ms);
+      // Wait (up to 3 s) for a state update after the request showing the new track playing.
+      while (performance.now() - asked < 3000 && !(lastStateAt > asked && onTrack(r))) {
+        await sleep(30);
+        if (this.switching !== token) return;
+      }
+    } finally {
+      if (this.switching === token) { this.switching = 0; this.apply(); }
+    }
+  },
   pause() { player?.pause().catch(() => {}); },
   resume() { player?.resume().catch(() => {}); },
   seek(ms) { player?.seek(Math.max(0, ms)).catch(() => {}); },
@@ -1213,9 +1234,11 @@ function planTimeline(items) {
     return p;
   });
 }
-function envelope(p, T, cut) {
+// `shift`: how late the item actually became audible (e.g. Spotify switching tracks), so its
+// fade-in starts from when you can hear it rather than from when it was asked to play.
+function envelope(p, T, cut, shift = 0) {
   let v = 1;
-  if (p.fadeIn > 0) v = Math.min(v, (T - p.start) / p.fadeIn);
+  if (p.fadeIn > 0) v = Math.min(v, (T - p.start - shift) / p.fadeIn);
   if (p.fadeOut > 0) v = Math.min(v, (p.end - T) / p.fadeOut);
   if (cut && T > cut.at) v = Math.min(v, (cut.at + cut.ms - T) / cut.ms);
   return clamp01(v);
@@ -1244,7 +1267,7 @@ function tlTick(tl) {
   // Silence any channel no longer holding a live item.
   const used = new Set([...tl.live.values()].map((e) => e.ch));
   for (const c of channels) if (c.key && !used.has(c)) c.stop();
-  for (const [i, e] of tl.live) { e.ch.level = envelope(tl.plan[i], T, tl.cut); e.ch.apply(); }
+  for (const [i, e] of tl.live) { e.ch.level = e.ready ? envelope(tl.plan[i], T, tl.cut, e.shift) : 0; e.ch.apply(); }
   let idx = tl.plan.findIndex((p) => T < p.end);
   if (idx < 0) idx = tl.plan.length - 1;
   if (idx !== tl.idx) { const from = tl.idx; tl.idx = idx; tl.hooks.onSegment?.(idx, from, tl.quiet); }
@@ -1260,13 +1283,14 @@ function tlLaunch(tl, i, T) {
     ch = pool.find((c) => !used.has(c)) || pool[0];
   }
   for (const [j, e] of tl.live) if (e.ch === ch) tl.live.delete(j); // a channel holds one item
-  const ent = { ch, ready: false };
+  const ent = { ch, ready: false, shift: 0 };
   tl.live.set(i, ent);
-  setLevel(ch, envelope(p, T, tl.cut));
+  setLevel(ch, 0); // silent until it's actually playing
   const token = tl.token;
   ch.play(r, r.startMs + Math.max(0, T - p.start)).then(() => {
     if (token !== tl.token || tl.live.get(i) !== ent) return;
     ent.ready = true;
+    ent.shift = Math.max(0, tlNow(tl) - T);
     if (tl.paused) ch.pause();
   }, (e) => {
     if (token !== tl.token || tl.live.get(i) !== ent || interrupted(e)) return;
