@@ -235,9 +235,20 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
 .drink.show { opacity: 1; }
 @media (prefers-reduced-motion: reduce) { .drink { transition: none; } }
 
-/* Visualizer: a canvas behind the run view. With it on, the run view goes dark like a stage. */
-.viz { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; z-index: 0; }
-.run > :not(.viz):not(.drink) { position: relative; z-index: 1; }
+/* Visualizer: Lucid in a frame behind the run view. With it on, the run view goes dark like a stage. */
+.viz { position: absolute; inset: 0; width: 100%; height: 100%; display: block; border: 0; pointer-events: none; z-index: 0; background: #05030B; }
+.run > :not(.viz):not(.drink):not(.viz-bar) { position: relative; z-index: 1; }
+/* Visual controls open: Lucid's own controls take over; the power hour keeps playing underneath. */
+.run.viz-controls .viz { pointer-events: auto; }
+.run.viz-controls > :not(.viz):not(.drink):not(.viz-bar) { visibility: hidden; }
+.viz-bar {
+  position: absolute; top: 1rem; left: 50%; transform: translateX(-50%); z-index: 3; display: flex; flex-wrap: wrap;
+  align-items: center; justify-content: center; gap: .5rem; padding: .5rem .7rem; border-radius: 1rem; width: max-content;
+  max-width: calc(100% - 2rem); background: rgba(10, 6, 24, .78); color: #FBF3E4; border: 1px solid rgba(255, 255, 255, .2);
+  backdrop-filter: blur(12px); font-size: .9rem;
+}
+.viz-bar .btn { --surface: rgba(255, 255, 255, .08); --ink: #FBF3E4; --line: rgba(255, 255, 255, .28); }
+.viz-bar .btn[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
 .drink { z-index: 2; }
 .run.viz-on {
   color-scheme: dark; background: #05030B; color: #FBF3E4;
@@ -333,7 +344,9 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
         <label class="check"><input type="checkbox" id="set-drink"> Flash “Drink” after each song (not after sound bites)</label>
         <label class="check"><input type="checkbox" id="set-hidenext"> Hide what’s next during the power hour</label>
         <label class="field"><span>Visualizer during the power hour</span>
-          <select id="set-viz"><option value="flow">Flow (like old iTunes)</option><option value="bars">Bars (like VLC)</option><option value="off">Off</option></select></label>
+          <select id="set-viz"><option value="lucid">Lucid</option><option value="off">Off</option></select></label>
+        <label class="field"><span>Visualizer listens to</span>
+          <select id="set-vizsrc"><option value="capture">Computer audio (share prompt at Start)</option><option value="mic">Microphone</option><option value="files">Uploaded files only</option></select></label>
       </div>
       <div class="row-tools">
         <button class="linkish" type="button" id="export-btn">Export list</button>
@@ -370,10 +383,17 @@ code { background: var(--surface-2); padding: .1em .35em; border-radius: .3em; f
 </div>
 
 <section data-view="run" class="run" hidden>
-  <canvas class="viz" id="viz" aria-hidden="true" hidden></canvas>
+  <iframe class="viz" id="lucid" title="Lucid visualizer" tabindex="-1" hidden></iframe>
+  <div class="viz-bar" id="viz-bar" hidden>
+    <span>Visualizer hears: <b id="viz-hears"></b></span>
+    <button class="btn small" type="button" data-listen="capture" title="Share what's going to the speakers: Entire screen + Share system audio, or this tab + Share tab audio">Computer audio</button>
+    <button class="btn small" type="button" data-listen="mic">Microphone</button>
+    <button class="btn small" type="button" data-listen="files">Uploaded files only</button>
+    <button class="btn small primary" type="button" id="viz-done">Back to the power hour</button>
+  </div>
   <div class="run-top">
     <div><div class="count" id="run-count"></div><div class="run-left" id="run-left"></div></div>
-    <div class="right"><button class="btn small ghost" type="button" id="run-viz" title="Change the visualizer (V). Uploaded files drive it directly; Spotify songs and audio links use a simulated beat, since browsers don’t let pages read their sound."></button><button class="btn small ghost" type="button" id="run-hide-next"></button><button class="btn" type="button" id="run-end">End</button></div>
+    <div class="right"><button class="btn small ghost" type="button" id="run-viz" title="Lucid's controls: looks, tune sliders, auto, save and copy settings (V)">Visuals</button><button class="btn small ghost" type="button" id="run-hide-next"></button><button class="btn" type="button" id="run-end">End</button></div>
   </div>
   <div class="stage">
     <div class="clock" id="clock" aria-live="off">60</div>
@@ -436,7 +456,7 @@ function parseTime(str) {
   return null;
 }
 const uid = () => Math.random().toString(36).slice(2, 10);
-const VIZ_MODES = ["flow", "bars", "off"];
+const VIZ_MODES = ["lucid", "off"], VIZ_SRCS = ["capture", "mic", "files"];
 let toastTimer;
 function toast(msg) {
   const t = $("#toast");
@@ -494,11 +514,13 @@ function cleanSettings(s) {
   if (+s.volume >= 0 && +s.volume <= 1) out.volume = +s.volume;
   if (typeof s.drinkCue === "boolean") out.drinkCue = s.drinkCue;
   if (VIZ_MODES.includes(s.viz)) out.viz = s.viz;
+  else if (s.viz === "flow" || s.viz === "bars") out.viz = "lucid"; // v7 styles, replaced by Lucid
+  if (VIZ_SRCS.includes(s.vizSrc)) out.vizSrc = s.vizSrc;
   return out;
 }
 let list = (store.get("list", []) || []).map(normalizeRow).filter(Boolean);
 const reducedMotion = !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-let settings = Object.assign({ segSec: 60, fadeInSec: 1, fadeOutSec: 2, volume: 0.8, drinkCue: true, hideNext: false, viz: reducedMotion ? "off" : "flow" }, cleanSettings(store.get("settings", {})));
+let settings = Object.assign({ segSec: 60, fadeInSec: 1, fadeOutSec: 2, volume: 0.8, drinkCue: true, hideNext: false, viz: reducedMotion ? "off" : "lucid", vizSrc: "capture" }, cleanSettings(store.get("settings", {})));
 const saveList = () => store.set("list", list);
 const saveSettings = () => store.set("settings", settings);
 // Per-song length (row.lenSec) overrides the default from Settings.
@@ -696,18 +718,6 @@ function getAudioCtx() {
   return audioCtx;
 }
 function unlockAudio() { try { player?.activateElement?.(); } catch {} getAudioCtx(); }
-// One shared analyser for uploaded files (the only audio a page is allowed to read).
-let analyser = null;
-function getAnalyser(ctx) {
-  if (!analyser) {
-    analyser = ctx.createAnalyser();
-    analyser.fftSize = 2048;
-    analyser.smoothingTimeConstant = 0.7;
-    analyser.minDecibels = -90; analyser.maxDecibels = -20;
-    analyser.connect(ctx.destination);
-  }
-  return analyser;
-}
 async function playAt(uri, ms) {
   if (!deviceId) throw new Error("The Spotify player isn’t ready yet.");
   await api("/me/player/play?device_id=" + deviceId, { method: "PUT", body: { uris: [uri], position_ms: Math.max(0, Math.round(ms)) } });
@@ -816,8 +826,8 @@ function makeAudioChannel(pool) {
       if (!ctx) return;
       try {
         this.gain = ctx.createGain();
-        // The analyser passes the sound through unchanged; the visualizer reads it.
-        ctx.createMediaElementSource(el).connect(this.gain).connect(getAnalyser(ctx));
+        ctx.createMediaElementSource(el).connect(this.gain).connect(ctx.destination);
+        this.gain.connect(filesTap(ctx)); // the visualizer can read uploaded files directly
       } catch { this.gain = null; }
     },
     apply() {
@@ -1417,184 +1427,114 @@ function testTransition(r) {
   tlStart(tl, startT);
 }
 
-/* ---------- Visualizer ----------
-   Two styles: "flow" (glowing trails that zoom and swirl, like the old iTunes visualizer)
-   and "bars" (a spectrum analyzer, like VLC or Winamp). Uploaded files are read through the
-   analyser, so the visuals follow the real sound. Browsers don't let a page read Spotify's
-   stream or audio from other sites, so those get a simulated beat that follows each
-   item's volume and fades. */
-const VIZ_LABEL = { flow: "Visuals: Flow", bars: "Visuals: Bars", off: "Visuals: Off" };
-const VIZ_BG = "#05030B";
-const viz = {
-  raf: 0, last: 0, mode: null, buf: null, grad: null,
-  bins: new Float32Array(64), tgt: new Float32Array(64), peaks: new Float32Array(64), wave: new Float32Array(256),
-  freqBuf: null, timeBuf: null, hue: 260, spin: 1, flipAt: 0, prevBass: 0, sparks: [],
-};
-const avgBins = (a, b) => { let s = 0; for (let i = a; i < b; i++) s += viz.bins[i]; return s / (b - a); };
-// What's sounding now: { real: true } when an uploaded file is playing, otherwise the loudest
-// level among Spotify and audio links (0 when nothing plays).
-function vizSource() {
-  if (analyser && audioChs.some((c) => c.pool === "file" && c.gain && c.key && !c.el.paused)) return { real: true };
-  let lvl = 0;
-  for (const c of audioChs) if (c.pool === "url" && c.key && !c.el.paused) lvl = Math.max(lvl, c.level * c.mul);
-  if (spotifyCh.key && lastState && !lastState.paused && !spotifyCh.switching) lvl = Math.max(lvl, spotifyCh.level * spotifyCh.mul);
-  return { real: false, lvl: clamp01(lvl) };
+/* ---------- Visualizer: Lucid ----------
+   Lucid (lucid/index.html, loaded with ?embed=1) draws behind the run screen. The power hour
+   plays the music and hands Lucid the sound to react to, chosen in Settings:
+   - capture: what's going to the speakers, through the browser's share prompt (Entire screen +
+     Share system audio, or this tab + Share tab audio). The only way to hear Spotify: pages
+     can't read its stream directly.
+   - mic: the room, through the microphone.
+   - files: uploaded files, read directly (Spotify songs and links are silent to it).
+   Uploaded files also feed Lucid whenever no capture or microphone is running. */
+const VIZ_HEARS = { capture: "computer audio", mic: "the microphone", files: "uploaded files only" };
+const viz = { lucid: null, loading: null, input: null, tap: null, stream: null, node: null, kind: "files", controls: false };
+function filesTap(ctx) {
+  if (!viz.tap) viz.tap = ctx.createGain();
+  return viz.tap;
 }
-function vizSample(t, k) {
-  const N = viz.bins.length, W = viz.wave.length, src = vizSource();
-  if (src.real) {
-    viz.freqBuf ||= new Uint8Array(analyser.frequencyBinCount);
-    viz.timeBuf ||= new Float32Array(analyser.fftSize);
-    analyser.getByteFrequencyData(viz.freqBuf);
-    analyser.getFloatTimeDomainData(viz.timeBuf);
-    // Log-spaced bands from 40 Hz to 16 kHz, so bass and treble get equal room.
-    const L = viz.freqBuf.length, hzPerBin = analyser.context.sampleRate / 2 / L;
-    for (let i = 0; i < N; i++) {
-      const a = Math.floor((40 * 400 ** (i / N)) / hzPerBin), b = Math.max(a + 1, Math.ceil((40 * 400 ** ((i + 1) / N)) / hzPerBin));
-      let m = 0;
-      for (let j = a; j < b && j < L; j++) m = Math.max(m, viz.freqBuf[j]);
-      viz.tgt[i] = m / 255;
-    }
-    for (let i = 0; i < W; i++) viz.wave[i] = viz.timeBuf[Math.floor((i * viz.timeBuf.length) / W)] * 1.6;
-  } else {
-    // Simulated: a 122 BPM kick, snare on 2 and 4, off-beat hats, and drifting mids.
-    const lvl = src.lvl, beat = (t / 1000) * (122 / 60);
-    const kick = Math.exp(-(beat % 1) * 6), hat = Math.exp(-((beat + 0.5) % 1) * 14), snare = Math.exp(-((beat + 1) % 2) * 9);
-    for (let i = 0; i < N; i++) {
-      const x = i / N;
-      const drift = 0.5 + 0.5 * Math.sin(t / 900 * (1 + x * 3) + i * 1.7) * Math.sin(t / 1300 + i * 0.6);
-      const v = (0.5 - x * 0.3) * (0.55 + 0.45 * drift)
-        + kick * Math.max(0, 1 - x * 4) * 0.55
-        + snare * (x > 0.2 && x < 0.7 ? 0.3 : 0)
-        + hat * Math.max(0, x - 0.6) * 0.9;
-      viz.tgt[i] = clamp01(v * lvl);
-    }
-    for (let i = 0; i < W; i++) {
-      const u = (i / W) * Math.PI * 2;
-      viz.wave[i] = lvl * (0.35 * (0.4 + kick) * Math.sin(u * 3 + t / 180) + 0.15 * Math.sin(u * 11 - t / 90) + 0.06 * hat * Math.sin(u * 37 + t / 40));
-    }
-  }
-  // Fast attack, slow fall, like a real meter.
-  const fall = 0.88 ** k;
-  for (let i = 0; i < N; i++) viz.bins[i] = viz.tgt[i] > viz.bins[i] ? viz.bins[i] + (viz.tgt[i] - viz.bins[i]) * 0.6 : viz.bins[i] * fall;
+// Lucid hears either the capture/mic stream or, without one, the uploaded files.
+function vizRewire() {
+  if (!viz.input) return;
+  for (const n of [viz.tap, viz.node]) try { n?.disconnect(viz.input); } catch {}
+  (viz.node || filesTap(getAudioCtx())).connect(viz.input);
+  $("#viz-hears").textContent = VIZ_HEARS[viz.node ? viz.kind : "files"];
+  for (const b of document.querySelectorAll("[data-listen]")) b.setAttribute("aria-pressed", b.dataset.listen === (viz.node ? viz.kind : "files"));
 }
-function drawFlow(c, w, h, t, dt, k) {
-  // Feedback: redraw the last frame slightly zoomed and rotated, a little dimmer, so every
-  // shape leaves a swirling trail.
-  const buf = viz.buf ||= document.createElement("canvas");
-  if (buf.width !== w || buf.height !== h) { buf.width = w; buf.height = h; }
-  const b = buf.getContext("2d");
-  b.globalCompositeOperation = "copy";
-  b.drawImage(c.canvas, 0, 0);
-  const bass = avgBins(0, 6), mid = avgBins(6, 30), high = avgBins(30, 64);
-  c.globalCompositeOperation = "source-over";
-  c.globalAlpha = 1;
-  c.fillStyle = VIZ_BG; c.fillRect(0, 0, w, h);
-  c.save();
-  c.globalAlpha = 0.9 ** k;
-  c.translate(w / 2, h / 2);
-  c.rotate((0.003 + mid * 0.012) * k * viz.spin);
-  const z = 1 + (0.008 + bass * 0.035) * k;
-  c.scale(z, z);
-  c.translate(-w / 2, -h / 2);
-  c.drawImage(buf, 0, 0);
-  c.restore();
-  if (t > viz.flipAt) { viz.spin = -viz.spin; viz.flipAt = t + 8000 + Math.random() * 8000; }
-  viz.hue = (viz.hue + dt * 0.012 + bass * dt * 0.05) % 360;
-
-  c.globalCompositeOperation = "lighter";
-  const m = Math.min(w, h), cx = w / 2, cy = h / 2, n = viz.wave.length, lw = Math.max(1.5, m / 220);
-  c.lineWidth = lw; c.lineJoin = "round";
-  // A ring shaped by the waveform (mirrored so the seam is smooth), pulsing with the bass.
-  const R = m * (0.15 + bass * 0.12), rot = t * 0.00025 * viz.spin;
-  c.strokeStyle = `hsla(${viz.hue},100%,62%,.9)`;
-  c.beginPath();
-  for (let i = 0; i <= n; i++) {
-    const j = Math.min(n - 1, (i <= n / 2 ? i : n - i) * 2);
-    const a = rot + (i / n) * Math.PI * 2, r = R + viz.wave[j] * m * 0.18;
-    i ? c.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r) : c.moveTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
-  }
-  c.closePath(); c.stroke();
-  // Two ribbons flowing across the screen.
-  for (const s of [-1, 1]) {
-    c.strokeStyle = `hsla(${(viz.hue + 120 * s + 360) % 360},100%,60%,${0.35 + high * 0.6})`;
-    c.beginPath();
-    for (let i = 0; i < n; i++) {
-      const x = (i / (n - 1)) * w;
-      const y = cy + s * (viz.wave[i] * m * 0.3 + Math.sin((i / n) * Math.PI * 2 + t * 0.001 * s) * m * 0.08);
-      i ? c.lineTo(x, y) : c.moveTo(x, y);
+function loadLucid() {
+  return viz.loading ||= new Promise((res, rej) => {
+    const f = $("#lucid");
+    f.onload = () => {
+      const w = f.contentWindow;
+      if (!w?.__lucid?.attachExternal) return rej(new Error("The visualizer didn’t load."));
+      const ctx = getAudioCtx();
+      viz.lucid = w.__lucid;
+      viz.input = ctx.createGain();
+      viz.input.connect(viz.lucid.attachExternal(ctx));
+      vizRewire();
+      res();
+    };
+    f.onerror = () => rej(new Error("The visualizer didn’t load."));
+    f.src = "lucid/?embed=1";
+  }).catch((e) => { viz.loading = null; toast(e.message); });
+}
+function stopListening() {
+  if (viz.stream) viz.stream.getTracks().forEach((t) => { t.onended = null; t.stop(); });
+  try { viz.node?.disconnect(); } catch {}
+  viz.stream = viz.node = null;
+  vizRewire();
+}
+function useStream(stream, kind) {
+  stopListening();
+  const ctx = getAudioCtx();
+  viz.stream = stream; viz.kind = kind;
+  viz.node = ctx.createMediaStreamSource(new MediaStream(stream.getAudioTracks()));
+  for (const t of stream.getAudioTracks()) t.onended = () => {
+    if (viz.stream !== stream) return;
+    stopListening();
+    toast("The visualizer stopped hearing " + VIZ_HEARS[kind] + ". It’s using uploaded files only.");
+  };
+  vizRewire();
+}
+// Ask for the chosen sound. Must start from a click: browsers only show these prompts then.
+async function startListening(kind) {
+  if (kind === "files") { stopListening(); return true; }
+  const raw = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+  try {
+    let stream;
+    if (kind === "mic") stream = await navigator.mediaDevices.getUserMedia({ audio: raw });
+    else {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true, audio: raw, systemAudio: "include", selfBrowserSurface: "include", surfaceSwitching: "exclude",
+      });
+      if (!stream.getAudioTracks().length) {
+        stream.getTracks().forEach((t) => t.stop());
+        toast("No audio was shared. Next time pick Entire screen with “Share system audio”, or this tab with “Share tab audio”.");
+        return false;
+      }
+      stream.getVideoTracks().forEach((t) => t.stop()); // only the sound is needed
     }
-    c.stroke();
+    useStream(stream, kind);
+    return true;
+  } catch {
+    toast(kind === "mic" ? "The microphone wasn’t allowed. The visualizer is using uploaded files only."
+      : "Audio sharing was cancelled. The visualizer is using uploaded files only.");
+    return false;
   }
-  // Sparks burst from the center on bass hits; the feedback turns them into streaks.
-  if (bass - viz.prevBass > 0.08 && bass > 0.3 && viz.sparks.length < 300) {
-    for (let i = 0; i < 14; i++) {
-      const a = Math.random() * Math.PI * 2, v = m * (0.004 + Math.random() * 0.01);
-      viz.sparks.push({ x: cx, y: cy, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1, hue: viz.hue + 40 + Math.random() * 60 });
-    }
-  }
-  viz.prevBass = bass;
-  for (const p of viz.sparks) {
-    p.x += p.vx * k; p.y += p.vy * k; p.life -= 0.018 * k;
-    c.fillStyle = `hsla(${p.hue % 360},100%,70%,${Math.max(0, p.life)})`;
-    c.beginPath(); c.arc(p.x, p.y, lw * 1.4, 0, Math.PI * 2); c.fill();
-  }
-  viz.sparks = viz.sparks.filter((p) => p.life > 0);
-  c.globalCompositeOperation = "source-over";
 }
-function drawBars(c, w, h, k, dpr) {
-  c.globalCompositeOperation = "source-over";
-  c.fillStyle = VIZ_BG; c.fillRect(0, 0, w, h);
-  const N = w < 700 * dpr ? 32 : 64, per = viz.bins.length / N;
-  const base = h * 0.97, maxH = h * 0.6, slot = w / N, bw = slot * 0.76, seg = Math.max(4, Math.round(5 * dpr));
-  if (!viz.grad) {
-    viz.grad = c.createLinearGradient(0, base, 0, base - maxH);
-    viz.grad.addColorStop(0, "#1FE07A"); viz.grad.addColorStop(0.6, "#F5E663"); viz.grad.addColorStop(1, "#FF4B3E");
-  }
-  c.fillStyle = viz.grad;
-  for (let i = 0; i < N; i++) {
-    let v = 0;
-    for (let j = 0; j < per; j++) v = Math.max(v, viz.bins[i * per + j]);
-    viz.peaks[i] = Math.max(v, viz.peaks[i] - 0.006 * k);
-    c.fillRect(i * slot + (slot - bw) / 2, base - v * maxH, bw, v * maxH);
-  }
-  // Thin dark lines across the bars give the segmented LED look.
-  c.fillStyle = VIZ_BG;
-  for (let y = base - seg; y > base - maxH; y -= seg) c.fillRect(0, y, w, Math.max(1, dpr));
-  // Peak caps that drift back down.
-  c.fillStyle = "rgba(255,255,255,.85)";
-  for (let i = 0; i < N; i++) if (viz.peaks[i] > 0.01) c.fillRect(i * slot + (slot - bw) / 2, base - viz.peaks[i] * maxH - 2 * dpr, bw, 2 * dpr);
-}
-function vizFrame(now) {
-  viz.raf = requestAnimationFrame(vizFrame);
-  const cv = $("#viz"), c = cv.getContext("2d");
-  const dt = Math.min(100, now - (viz.last || now)), k = dt / 16.7;
-  viz.last = now;
-  // Flow draws at half resolution: the trails hide it, and it keeps the frame rate up.
-  const dpr = Math.min(2, window.devicePixelRatio || 1), scale = settings.viz === "flow" ? 0.5 : 1;
-  const W = Math.max(1, Math.round(cv.clientWidth * dpr * scale)), H = Math.max(1, Math.round(cv.clientHeight * dpr * scale));
-  if (cv.width !== W || cv.height !== H || viz.mode !== settings.viz) {
-    cv.width = W; cv.height = H; viz.mode = settings.viz; viz.grad = null; viz.sparks = [];
-    c.fillStyle = VIZ_BG; c.fillRect(0, 0, W, H);
-  }
-  vizSample(now, k);
-  if (settings.viz === "bars") drawBars(c, W, H, k, dpr * scale);
-  else drawFlow(c, W, H, now, dt, k);
-}
-// Start or stop the animation to match the run view and the chosen style.
+// Show Lucid behind the run view while a power hour is on; it skips drawing otherwise.
 function vizUpdate() {
-  const shown = run.active && settings.viz !== "off";
+  const shown = run.active && settings.viz === "lucid" && !!viz.lucid;
   $(".run").classList.toggle("viz-on", shown);
-  $("#viz").hidden = !shown;
-  $("#run-viz").textContent = VIZ_LABEL[settings.viz];
-  const animate = shown && document.visibilityState === "visible";
-  if (animate && !viz.raf) { viz.last = 0; viz.raf = requestAnimationFrame(vizFrame); }
-  if (!animate && viz.raf) { cancelAnimationFrame(viz.raf); viz.raf = 0; }
+  $("#lucid").hidden = !shown;
+  try { $("#lucid").contentWindow.__norender = !shown || document.visibilityState !== "visible"; } catch {}
+  if (!shown && viz.controls) vizControls(false);
 }
-function cycleViz() {
-  settings.viz = VIZ_MODES[(VIZ_MODES.indexOf(settings.viz) + 1) % VIZ_MODES.length];
-  saveSettings(); syncSettingsUI(); vizUpdate();
+// Lucid's own controls over the live visuals. The power hour keeps playing underneath.
+function vizControls(on) {
+  if (on && (!run.active || !viz.lucid)) return;
+  if (on && settings.viz !== "lucid") { settings.viz = "lucid"; saveSettings(); syncSettingsUI(); vizUpdate(); }
+  viz.controls = on;
+  $(".run").classList.toggle("viz-controls", on);
+  $("#viz-bar").hidden = !on;
+  try {
+    const app = $("#lucid").contentDocument.getElementById("app");
+    app.classList.toggle("embed-ui", on);
+    if (on) app.classList.remove("idle"); // show Lucid's dock right away (it hides when the mouse is still)
+    if (!on) { viz.lucid.toggleDrawer(false); viz.lucid.closePops(); }
+  } catch {}
+  if (on) vizRewire(); else window.focus();
 }
+window.addEventListener("message", (e) => { if (e.origin === location.origin && e.data?.lucid === "close") vizControls(false); });
 
 /* ---------- Run mode ---------- */
 const run = { active: false, done: false, queue: [], songNo: [], songs: 0, idx: 0, tl: null, wake: null, scrubbing: false };
@@ -1609,6 +1549,9 @@ document.addEventListener("visibilitychange", () => {
 
 async function startRun() {
   unlockAudio();
+  // Ask for the visualizer's sound first, while this still counts as the click that started it.
+  const wantViz = settings.viz === "lucid";
+  const listening = wantViz && settings.vizSrc !== "files" && !viz.stream ? startListening(settings.vizSrc) : null;
   await stopAll();
   run.queue = list.filter((r) => !r.unavailable);
   if (!run.queue.length) return;
@@ -1620,14 +1563,16 @@ async function startRun() {
       run.idx = idx;
       // A real song just ended on its own (sound bites skipped in between don't matter).
       if (!quiet && from >= 0 && settings.drinkCue && !run.queue[from].bite) flashDrink();
+      if (from !== idx) viz.lucid?.resetBeat(); // find each song's own tempo
       renderRun();
     },
     onTick: () => updateClock(),
     onDone: () => finishRun(),
   });
   Object.assign(run, { active: true, done: false, idx: 0, tl });
+  if (wantViz) { await listening; await loadLucid(); }
+  if (run.tl !== tl) return;
   showView("run");
-  viz.mode = null; // start from a clean canvas
   vizUpdate();
   $("#run-controls").hidden = false; $("#run-done").hidden = true;
   acquireWake();
@@ -1745,6 +1690,7 @@ async function endRun() {
   tlStop(tl);
   run.tl = null; run.done = false;
   try { await run.wake?.release(); } catch {}
+  stopListening();
   vizUpdate();
   showView("main");
   renderList();
@@ -1754,12 +1700,13 @@ async function endRun() {
    Exports use the same row format as the saved list. To keep every older export
    importable: only ADD fields in future versions (never rename or remove one),
    bump EXPORT_VERSION, and teach normalizeRow()/cleanSettings() to upgrade old data. */
-const EXPORT_VERSION = 7; // 1: Spotify songs only. 2: adds audio links/files, lenSec, embedded files.
+const EXPORT_VERSION = 8; // 1: Spotify songs only. 2: adds audio links/files, lenSec, embedded files.
                           // 3: adds per-song note, fadeInSec, fadeOutSec; settings fadeSec → fadeInSec/fadeOutSec, hideNext.
                           // 4: adds per-row bite (sound bite).
                           // 5: adds per-row volPct.
                           // 6: adds per-row startEarlySec; settings.overlap removed (fades no longer cause overlap).
                           // 7: adds settings.viz (visualizer style: flow, bars or off).
+                          // 8: settings.viz is lucid or off (flow/bars become lucid); adds settings.vizSrc.
 function blobToDataUrl(blob) {
   return new Promise((res, rej) => {
     const fr = new FileReader();
@@ -1985,13 +1932,15 @@ function bindMain() {
     if (e.code === "Space") { e.preventDefault(); togglePause(); }
     if (e.key === "ArrowRight") jump(1);
     if (e.key === "ArrowLeft") jump(-1);
-    if (e.key === "v" || e.key === "V") cycleViz();
+    if (e.key === "v" || e.key === "V") vizControls(!viz.controls);
   });
-  $("#run-viz").onclick = cycleViz;
+  $("#run-viz").onclick = () => vizControls(!viz.controls);
+  $("#viz-done").onclick = () => vizControls(false);
+  for (const b of document.querySelectorAll("[data-listen]")) b.onclick = () => startListening(b.dataset.listen);
 
   // Settings
   const seg = $("#set-seg"), fin = $("#set-fadein"), fout = $("#set-fadeout"), vol = $("#set-vol");
-  const drink = $("#set-drink"), hideNext = $("#set-hidenext"), vizSel = $("#set-viz");
+  const drink = $("#set-drink"), hideNext = $("#set-hidenext"), vizSel = $("#set-viz"), vizSrc = $("#set-vizsrc");
   const secs = (v) => (v ? v + "s" : "off");
   const showVals = () => {
     $("#fadein-val").textContent = secs(settings.fadeInSec);
@@ -2002,10 +1951,11 @@ function bindMain() {
     seg.value = settings.segSec; fin.value = settings.fadeInSec; fout.value = settings.fadeOutSec;
     vol.value = Math.round(settings.volume * 100);
     drink.checked = settings.drinkCue; hideNext.checked = settings.hideNext;
-    vizSel.value = settings.viz;
+    vizSel.value = settings.viz; vizSrc.value = settings.vizSrc;
     showVals(); applyVolume();
   };
   vizSel.onchange = () => { settings.viz = vizSel.value; saveSettings(); vizUpdate(); };
+  vizSrc.onchange = () => { settings.vizSrc = vizSrc.value; saveSettings(); };
   syncSettingsUI();
   seg.onchange = () => { settings.segSec = Math.max(10, Math.min(300, Math.round(+seg.value) || 60)); seg.value = settings.segSec; saveSettings(); renderList(); };
   fin.oninput = () => { settings.fadeInSec = +fin.value; saveSettings(); showVals(); };

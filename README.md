@@ -97,7 +97,12 @@ Open `http://127.0.0.1:8000/` (not `localhost`).
 - The list saves in the browser automatically, and survives site updates.
 - **Backups** (Settings): **Export list** saves songs and settings; **Export with audio files** also embeds your uploaded files, so it's a full backup you can restore on any computer. **Import list** restores either kind, replacing the current list (it asks first).
 - Any export from any version of this app keeps importing in later versions. Rule for changing the format: only add fields, never rename or remove them; bump `EXPORT_VERSION` in `index.html` and upgrade old rows in `normalizeRow()`.
-- **Visualizer** (Settings, or the **Visuals** button / V key during the hour): **Flow** is glowing, swirling trails like the old iTunes visualizer; **Bars** is a spectrum analyzer like VLC or Winamp; or **Off**. Uploaded files drive it from their real sound. Browsers don't let a page read Spotify's audio or audio from other sites, so for those it follows a simulated beat that still rises and falls with each song's volume and fades. It's off by default if the computer is set to reduce motion.
+- **Visualizer: Lucid** runs behind the power hour screen (Settings: Lucid or Off; off by default if the computer is set to reduce motion). It reacts to the real sound, chosen under **Visualizer listens to**:
+  - **Computer audio** (default): when you press Start, the browser's share prompt appears. On Windows pick **Entire screen** and tick **Share system audio**; or pick this tab and tick **Share tab audio**. This is the only way it hears Spotify, because pages can't read Spotify's stream directly.
+  - **Microphone**: listens to the room.
+  - **Uploaded files only**: no prompt; Spotify songs and links are silent to it. Uploaded files also feed it whenever no capture or microphone is running.
+  - Its beat tracking restarts at each new song, so each song's tempo is found fresh.
+- **Visuals** button (or **V**) during the hour opens Lucid's own controls over the live picture: Looks, Auto, the **Tune** sliders, **Copy settings** and **Save this look**, plus buttons to switch what it listens to. **Back to the power hour** (or Escape) closes them; the music keeps playing. Lucid remembers its settings in the browser, shared with the standalone page at `lucid/`, so a look can be tuned in either place.
 - During the hour: Space pauses, arrow keys skip. Keep the tab open; the screen is kept awake where the browser allows it.
 
 ## Known limits
