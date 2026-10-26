@@ -97,6 +97,7 @@ Open `http://127.0.0.1:8000/` (not `localhost`).
 - The list saves in the browser automatically, and survives site updates.
 - **Backups** (Settings): **Export list** saves songs and settings; **Export with audio files** also embeds your uploaded files, so it's a full backup you can restore on any computer. **Import list** restores either kind, replacing the current list (it asks first).
 - Any export from any version of this app keeps importing in later versions. Rule for changing the format: only add fields, never rename or remove them; bump `EXPORT_VERSION` in `index.html` and upgrade old rows in `normalizeRow()`.
+- **Visualizer** (Settings, or the **Visuals** button / V key during the hour): **Flow** is glowing, swirling trails like the old iTunes visualizer; **Bars** is a spectrum analyzer like VLC or Winamp; or **Off**. Uploaded files drive it from their real sound. Browsers don't let a page read Spotify's audio or audio from other sites, so for those it follows a simulated beat that still rises and falls with each song's volume and fades. It's off by default if the computer is set to reduce motion.
 - During the hour: Space pauses, arrow keys skip. Keep the tab open; the screen is kept awake where the browser allows it.
 
 ## Known limits
